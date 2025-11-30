@@ -5,6 +5,7 @@ from telegram.ext import ContextTypes, Application
 import services
 
 # Setup logger
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # --- HELPERS ---
@@ -52,39 +53,76 @@ async def alarm_done(context: ContextTypes.DEFAULT_TYPE):
             chat_id=job.chat_id, 
             text=f"✅ **Laundry Done!**\nYour machine **{mid}** is finished.\nPlease collect it immediately!",
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(kb) # Button added here
+            reply_markup=InlineKeyboardMarkup(kb)
         )
     except Exception as e:
         logger.error(f"❌ Failed to send DONE alarm: {e}")
 
-# --- RESTORE TIMERS ON STARTUP ---
+# --- RESTORE TIMERS ON STARTUP (DEBUGGED) ---
 async def restore_timers(application: Application):
+    """
+    Called on bot startup. 
+    Reads 'Running' machines from DB and re-schedules their alarms in RAM.
+    """
     print("🔄 Hydrating Timers from Supabase...")
-    running_machines = services.get_running_machines()
+    
+    if not application.job_queue:
+        print("❌ CRITICAL: Job Queue is NOT available. Notifications will fail.")
+        return
+
+    try:
+        running_machines = services.get_running_machines()
+    except Exception as e:
+        print(f"❌ Database Error during hydration: {e}")
+        return
+
     count = 0
     now = datetime.datetime.now(datetime.timezone.utc)
     
+    print(f"📄 Found {len(running_machines)} machines marked as 'Running' in DB.")
+
     for m in running_machines:
-        if not m.end_time or not m.current_user: continue
+        # Debugging: Print why we might skip
+        if not m.end_time:
+            print(f"⚠️ Skipping {m.id}: No end_time found.")
+            continue
+        if not m.current_user:
+            print(f"⚠️ Skipping {m.id}: No current_user found (Check DB join).")
+            continue
         
+        # Calculate seconds remaining
         delay = (m.end_time - now).total_seconds()
         user_id = m.current_user.id
         mid = m.id
         
-        if not application.job_queue:
-            print("❌ CRITICAL: Job Queue is not available during restore!")
-            return
+        print(f"⚙️ Restoring {mid}: {int(delay)}s remaining.")
 
         if delay > 0:
-            application.job_queue.run_once(alarm_done, delay, chat_id=user_id, data={"mid": mid}, name=f"done_{mid}")
+            # 1. Restore DONE Job
+            application.job_queue.run_once(
+                alarm_done, 
+                delay, 
+                chat_id=user_id, 
+                data={"mid": mid}, 
+                name=f"done_{mid}"
+            )
+            # 2. Restore 5-MIN Job (if > 5 mins left)
             if delay > 300:
-                application.job_queue.run_once(alarm_5min, delay - 300, chat_id=user_id, data={"mid": mid}, name=f"5min_{mid}")
+                application.job_queue.run_once(
+                    alarm_5min, 
+                    delay - 300, 
+                    chat_id=user_id, 
+                    data={"mid": mid}, 
+                    name=f"5min_{mid}"
+                )
             count += 1
         else:
-            print(f"⚠️ Missed alarm for {mid}. Sending immediate notification.")
+            # Machine finished while bot was sleeping/restarting!
+            print(f"⚠️ {mid} finished while offline. Sending immediate notification.")
             application.job_queue.run_once(alarm_done, 1, chat_id=user_id, data={"mid": mid}, name=f"done_{mid}")
+            count += 1
             
-    print(f"✅ Restored {count} active timers.")
+    print(f"✅ Successfully restored {count} active timers.")
 
 # --- COMMANDS ---
 
