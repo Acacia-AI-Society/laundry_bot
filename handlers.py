@@ -15,6 +15,7 @@ async def set_bot_commands(application):
         BotCommand("start", "Register / Welcome"),
         BotCommand("menu", "Select Machine (Start Laundry)"),
         BotCommand("status", "Check Status"),
+        BotCommand("reset", "Update Profile (Re-Onboard)"), # Added Reset
         BotCommand("help", "Show Help")
     ]
     await application.bot.set_my_commands(commands)
@@ -25,11 +26,26 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "🤖 **Hostel Laundry Bot Help**\n\n"
         "🟢 **/start** - Register/Onboard\n"
+        "🔄 **/reset** - Change your Name/Level/House\n"
         "🧺 **/menu** - Select a machine to START\n"
         "📊 **/status** - View machine status (Your Level)\n"
         "❓ **/help** - Show this message"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
+
+async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Forces the user back into the registration flow.
+    """
+    # Initialize registration state
+    context.user_data["registration"] = {"step": "NAME", "pending_machine": None}
+    
+    await update.message.reply_text(
+        "🔄 **Update Profile**\n\n"
+        "Let's set up your details again.\n\n"
+        "**1. What is your Name?** (Please type it below)",
+        parse_mode="Markdown"
+    )
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -161,7 +177,7 @@ async def handle_registration_text(update: Update, context: ContextTypes.DEFAULT
     kb = [[InlineKeyboardButton("Level 9", callback_data="reg_lvl_9"),
            InlineKeyboardButton("Level 17", callback_data="reg_lvl_17")]]
     
-    await update.message.reply_text(f"Hi {reg_data['name']}! Which laundry room level do you use?", reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text(f"Hi {reg_data['name']}! Which laundry room level do you primarily use?", reply_markup=InlineKeyboardMarkup(kb))
 
 # --- STATUS LOGIC ---
 async def send_status_text(update: Update, context: ContextTypes.DEFAULT_TYPE, machines, level):
@@ -198,12 +214,9 @@ async def send_status_text(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     # Add "Switch Level View" toggle
     kb = [[InlineKeyboardButton("Switch Level View", callback_data="toggle_status_level")]]
     
-    # FIX: Robustly handle both CallbackQueries (Buttons) and Messages (Commands)
     if update.callback_query:
-        # If we came from a button press, edit the message
         await update.callback_query.message.edit_text(response, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
     elif update.message:
-        # If we came from a command like /status, reply with a new message
         await update.message.reply_text(response, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 # --- CALLBACK HANDLER ---
@@ -256,14 +269,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # MACHINE SELECTION
     if data.startswith("sel_"):
-        # data = sel_11_washer_1
         mid = data.replace("sel_", "")
         await show_machine_control_panel(update, context, mid)
         return
 
     # SET TIMER
     if data.startswith("set_"):
-        # set_11_washer_1_30
         parts = data.rsplit("_", 1)
         mid = parts[0].replace("set_", "")
         mins = int(parts[1])
@@ -280,7 +291,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         machine = services.get_machine(mid)
         if machine.current_user:
             services.log_audit_event("FORCE_STOP", mid, machine.current_user.id, user.id)
-            # Notify victim (fire and forget)
             try:
                 await context.bot.send_message(machine.current_user.id, f"🚨 Your machine {mid} was stopped by {user.first_name}.")
             except: pass
