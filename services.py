@@ -68,6 +68,16 @@ def get_machine(machine_id: str) -> Optional[MachineState]:
         return _parse_machines(response.data)[0]
     return None
 
+# --- NEW: FOR RESTORING TIMERS ---
+def get_running_machines() -> List[MachineState]:
+    """Fetches ONLY machines that are currently marked as Running."""
+    query = supabase.table("machines").select(
+        "*, current_user:users!current_user_id(*)"
+    ).eq("status", "Running")
+    
+    response = query.execute()
+    return _parse_machines(response.data)
+
 def update_machine_status(machine_id: str, status: str, end_time: datetime.datetime, user_id: int):
     # Update machine state
     supabase.table("machines").update({

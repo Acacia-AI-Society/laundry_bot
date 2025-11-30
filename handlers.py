@@ -1,6 +1,6 @@
 import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
-from telegram.ext import ContextTypes
+from telegram.ext import ContextTypes, Application
 import services
 
 # --- HELPERS ---
@@ -19,6 +19,78 @@ async def set_bot_commands(application):
         BotCommand("help", "Show Help")
     ]
     await application.bot.set_my_commands(commands)
+
+# --- NOTIFICATION JOBS ---
+async def alarm_5min(context: ContextTypes.DEFAULT_TYPE):
+    """Sends a reminder 5 minutes before completion."""
+    job = context.job
+    try:
+        await context.bot.send_message(
+            chat_id=job.chat_id, 
+            text=f"⏳ **5 Minutes Left!**\nYour laundry in **{job.data['mid']}** is almost ready.",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass # User might have blocked bot
+
+async def alarm_done(context: ContextTypes.DEFAULT_TYPE):
+    """Sends a notification when laundry is finished."""
+    job = context.job
+    try:
+        await context.bot.send_message(
+            chat_id=job.chat_id, 
+            text=f"✅ **Laundry Done!**\nYour machine **{job.data['mid']}** is finished.\nPlease collect it immediately!",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+
+# --- NEW: RESTORE TIMERS ON STARTUP ---
+async def restore_timers(application: Application):
+    """
+    Called on bot startup. 
+    Reads 'Running' machines from DB and re-schedules their alarms in RAM.
+    """
+    print("🔄 Hydrating Timers from Supabase...")
+    running_machines = services.get_running_machines()
+    count = 0
+    now = datetime.datetime.now(datetime.timezone.utc)
+    
+    for m in running_machines:
+        if not m.end_time or not m.current_user: continue
+        
+        # Calculate seconds remaining
+        delay = (m.end_time - now).total_seconds()
+        user_id = m.current_user.id
+        mid = m.id
+        
+        if delay > 0:
+            # 1. Restore DONE Job
+            application.job_queue.run_once(
+                alarm_done, 
+                delay, 
+                chat_id=user_id, 
+                data={"mid": mid}, 
+                name=f"done_{mid}"
+            )
+            # 2. Restore 5-MIN Job (if > 5 mins left)
+            if delay > 300:
+                application.job_queue.run_once(
+                    alarm_5min, 
+                    delay - 300, 
+                    chat_id=user_id, 
+                    data={"mid": mid}, 
+                    name=f"5min_{mid}"
+                )
+            count += 1
+        else:
+            # Machine finished while bot was sleeping/restarting!
+            # Send 'Done' immediately and clean up DB status?
+            # For now, just notifying user is enough. Status updates via lazy evaluation in services.
+            print(f"⚠️ Missed alarm for {mid}. Sending immediate notification.")
+            application.job_queue.run_once(alarm_done, 1, chat_id=user_id, data={"mid": mid}, name=f"done_{mid}")
+            
+    print(f"✅ Restored {count} active timers.")
 
 # --- COMMANDS ---
 
@@ -55,7 +127,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not db_user:
         context.user_data["registration"] = {"step": "NAME", "pending_machine": args[0] if args else None}
         
-        # --- NEW INTRODUCTORY MESSAGE ---
         intro_text = (
             "👋 **Welcome to the Hostel Laundry Bot!**\n\n"
             "I am here to help you track washer/dryer availability and set timers so you never miss your laundry.\n\n"
@@ -63,7 +134,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(intro_text, parse_mode="Markdown")
         
-        # Then ask the first question
         await update.message.reply_text("**1. What is your Name?** (Please type it below)", parse_mode="Markdown")
         return
 
@@ -93,24 +163,17 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user = services.get_user(user.id)
     
-    # If not registered, default to Level 9 view or ask to register
     level_to_show = db_user.level if db_user else "9"
-    
-    # Handle "Show All" toggle via callback arg or default
     machines = services.get_machines_by_level(level_to_show)
-    
     await send_status_text(update, context, machines, level_to_show)
 
 # --- MENUS & UIs ---
 
 async def send_level_selection_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, level: str):
     # Generates grid for specific level with Dynamic Status Icons
-    
-    # 1. Fetch live status
     machines = services.get_machines_by_level(level)
     status_map = {m.id: m.status for m in machines}
 
-    # 2. Helper to determine button text
     def get_btn_text(type_short, type_key, index):
         mid = f"{level}_{type_key}_{index}"
         status = status_map.get(mid, "Available")
@@ -132,7 +195,6 @@ async def send_level_selection_menu(update: Update, context: ContextTypes.DEFAUL
     
     keyboard.extend([row1, row2, row3, row4])
     
-    # Navigation Buttons to switch levels
     nav_row = [
         InlineKeyboardButton("Lvl 9", callback_data="view_lvl_9"),
         InlineKeyboardButton("Lvl 17", callback_data="view_lvl_17"),
@@ -180,10 +242,15 @@ async def show_machine_control_panel(update: Update, context: ContextTypes.DEFAU
                InlineKeyboardButton("1 Hour", callback_data=f"set_{machine_id}_60")]]
     
     prev_msg = ""
-    if machine.status == 'Finished' and machine.end_time:
-        ago = format_time_delta(machine.end_time)
-        prev_user = machine.last_user.display_name if machine.last_user else "Unknown"
-        prev_msg = f"\n(Ready {ago}m ago. Last: {prev_user})"
+    
+    if machine.status == 'Finished':
+        if machine.end_time:
+            ago = format_time_delta(machine.end_time)
+            prev_user = machine.last_user.display_name if machine.last_user else "Unknown"
+            prev_msg = f"\n(Ready {ago}m ago. Last: {prev_user})"
+            
+            if machine.last_user:
+                kb.append([InlineKeyboardButton("🔔 Ping Owner (Hurry up!)", callback_data=f"ping_{machine_id}")])
 
     msg = f"⚙️ **{machine.level} {machine.type} {machine.id.split('_')[-1]}**\n{prev_msg}\nSelect duration:"
     
@@ -210,7 +277,6 @@ async def send_status_text(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     response = f"📊 **Laundry Status (Level {level})**\n\n"
     now = datetime.datetime.now(datetime.timezone.utc)
     
-    # Separate Washers and Dryers
     washers = [m for m in machines if m.type == 'Washer']
     dryers = [m for m in machines if m.type == 'Dryer']
     
@@ -237,7 +303,6 @@ async def send_status_text(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     response += "------------------\n"
     for d in dryers: response += format_line(d) + "\n"
     
-    # Add "Switch Level View" toggle
     kb = [[InlineKeyboardButton("Switch Level View", callback_data="toggle_status_level")]]
     
     if update.callback_query:
@@ -264,7 +329,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         house = data.split("_")[-1]
         reg = context.user_data["registration"]
         
-        # Save to Supabase
         new_user = services.UserInfo(
             id=user.id, username=user.username or "", first_name=user.first_name or "",
             display_name=reg["name"], level=reg["level"], house=house
@@ -308,7 +372,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         end_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=mins)
         services.update_machine_status(mid, "Running", end_time, user.id)
         
-        await query.edit_message_text(f"✅ Timer started for {mins} mins on {mid}!")
+        # SCHEDULE NOTIFICATIONS
+        if context.job_queue:
+            context.job_queue.run_once(alarm_done, mins * 60, chat_id=user.id, data={"mid": mid}, name=f"done_{mid}")
+            if mins > 5:
+                context.job_queue.run_once(alarm_5min, (mins - 5) * 60, chat_id=user.id, data={"mid": mid}, name=f"5min_{mid}")
+
+        await query.edit_message_text(f"✅ Timer started for {mins} mins on {mid}!\nI'll notify you when it's done.")
         return
 
     # FORCE STOP
@@ -321,6 +391,38 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(machine.current_user.id, f"🚨 Your machine {mid} was stopped by {user.first_name}.")
             except: pass
             
+            if context.job_queue:
+                for job in context.job_queue.get_jobs_by_name(f"done_{mid}"): job.schedule_removal()
+                for job in context.job_queue.get_jobs_by_name(f"5min_{mid}"): job.schedule_removal()
+
         services.reset_machine_status(mid)
         await show_machine_control_panel(update, context, mid)
+        return
+
+    # PING OWNER
+    if data.startswith("ping_"):
+        mid = data.replace("ping_", "")
+        
+        last_pings = context.bot_data.setdefault("pings", {})
+        last_time = last_pings.get(mid)
+        now = datetime.datetime.now()
+        
+        if last_time and (now - last_time).total_seconds() < 200:
+            remaining = 200 - int((now - last_time).total_seconds())
+            await query.answer(f"⏳ Cooldown! Wait {remaining}s.", show_alert=True)
+            return
+            
+        machine = services.get_machine(mid)
+        if machine.last_user:
+            try:
+                await context.bot.send_message(
+                    chat_id=machine.last_user.id,
+                    text=f"🔔 **PING!**\nSomeone is waiting for **{mid}**. Please collect your laundry immediately!"
+                )
+                await query.answer("🔔 Ping sent!", show_alert=True)
+                last_pings[mid] = now
+            except:
+                await query.answer("❌ Could not reach user.", show_alert=True)
+        else:
+             await query.answer("❌ No user history.", show_alert=True)
         return
