@@ -15,7 +15,7 @@ async def set_bot_commands(application):
         BotCommand("start", "Register / Welcome"),
         BotCommand("menu", "Select Machine (Start Laundry)"),
         BotCommand("status", "Check Status"),
-        BotCommand("reset", "Update Profile (Re-Onboard)"), # Added Reset
+        BotCommand("reset", "Update Profile (Re-Onboard)"),
         BotCommand("help", "Show Help")
     ]
     await application.bot.set_my_commands(commands)
@@ -37,7 +37,6 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Forces the user back into the registration flow.
     """
-    # Initialize registration state
     context.user_data["registration"] = {"step": "NAME", "pending_machine": None}
     
     await update.message.reply_text(
@@ -55,7 +54,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 1. Not Registered -> Onboarding
     if not db_user:
         context.user_data["registration"] = {"step": "NAME", "pending_machine": args[0] if args else None}
-        await update.message.reply_text("👋 **Welcome!**\n\nTo track laundry, I need to know who you are.\n\n**1. What is your Name?**")
+        
+        # --- NEW INTRODUCTORY MESSAGE ---
+        intro_text = (
+            "👋 **Welcome to the Hostel Laundry Bot!**\n\n"
+            "I am here to help you track washer/dryer availability and set timers so you never miss your laundry.\n\n"
+            "To get started, I just need a few details to set up your profile."
+        )
+        await update.message.reply_text(intro_text, parse_mode="Markdown")
+        
+        # Then ask the first question
+        await update.message.reply_text("**1. What is your Name?** (Please type it below)", parse_mode="Markdown")
         return
 
     # 2. Registered + Deep Link -> Show Machine
@@ -95,14 +104,31 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- MENUS & UIs ---
 
 async def send_level_selection_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, level: str):
-    # Generates grid for specific level
+    # Generates grid for specific level with Dynamic Status Icons
+    
+    # 1. Fetch live status
+    machines = services.get_machines_by_level(level)
+    status_map = {m.id: m.status for m in machines}
+
+    # 2. Helper to determine button text
+    def get_btn_text(type_short, type_key, index):
+        mid = f"{level}_{type_key}_{index}"
+        status = status_map.get(mid, "Available")
+        
+        if status == "Running":
+            return f"🔴 {type_short}{index}"
+        elif status == "Finished":
+            return f"🟡 {type_short}{index}"
+        else:
+            return f"🟢 {type_short}{index}"
+
     keyboard = []
     # Washers 1-5
-    row1 = [InlineKeyboardButton(f"🧺 W{i}", callback_data=f"sel_{level}_washer_{i}") for i in range(1, 4)]
-    row2 = [InlineKeyboardButton(f"🧺 W{i}", callback_data=f"sel_{level}_washer_{i}") for i in range(4, 6)]
+    row1 = [InlineKeyboardButton(get_btn_text("W", "washer", i), callback_data=f"sel_{level}_washer_{i}") for i in range(1, 4)]
+    row2 = [InlineKeyboardButton(get_btn_text("W", "washer", i), callback_data=f"sel_{level}_washer_{i}") for i in range(4, 6)]
     # Dryers 1-4
-    row3 = [InlineKeyboardButton(f"🔥 D{i}", callback_data=f"sel_{level}_dryer_{i}") for i in range(1, 3)]
-    row4 = [InlineKeyboardButton(f"🔥 D{i}", callback_data=f"sel_{level}_dryer_{i}") for i in range(3, 5)]
+    row3 = [InlineKeyboardButton(get_btn_text("D", "dryer", i), callback_data=f"sel_{level}_dryer_{i}") for i in range(1, 3)]
+    row4 = [InlineKeyboardButton(get_btn_text("D", "dryer", i), callback_data=f"sel_{level}_dryer_{i}") for i in range(3, 5)]
     
     keyboard.extend([row1, row2, row3, row4])
     
@@ -113,7 +139,7 @@ async def send_level_selection_menu(update: Update, context: ContextTypes.DEFAUL
     ]
     keyboard.append(nav_row)
 
-    text = f"👇 **Select Machine (Level {level})**"
+    text = f"👇 **Select Machine (Level {level})**\n\n🟢 Available  🔴 Running  🟡 Finished"
     markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
@@ -177,7 +203,7 @@ async def handle_registration_text(update: Update, context: ContextTypes.DEFAULT
     kb = [[InlineKeyboardButton("Level 9", callback_data="reg_lvl_9"),
            InlineKeyboardButton("Level 17", callback_data="reg_lvl_17")]]
     
-    await update.message.reply_text(f"Hi {reg_data['name']}! Which laundry room level do you primarily use?", reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text(f"Hi {reg_data['name']}! Which laundry room level do you use?", reply_markup=InlineKeyboardMarkup(kb))
 
 # --- STATUS LOGIC ---
 async def send_status_text(update: Update, context: ContextTypes.DEFAULT_TYPE, machines, level):
