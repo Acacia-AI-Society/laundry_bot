@@ -8,7 +8,7 @@ dependencies = [
     "fastapi>=0.122.0",
     "pydantic>=2.12.5",
     "python-dotenv>=1.2.1",
-    "python-telegram-bot>=22.5",
+    "python-telegram-bot[job-queue]>=22.5",
     "supabase>=2.24.0",
     "uvicorn>=0.38.0",
 ]
