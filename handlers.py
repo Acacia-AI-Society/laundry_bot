@@ -2,6 +2,7 @@ import datetime
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import ContextTypes, Application
+from telegram.error import BadRequest
 import services
 
 # Setup logger
@@ -446,7 +447,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             print("❌ CRITICAL: No JobQueue found in context! Notifications will FAIL.")
 
-        await query.edit_message_text(f"✅ Timer started for {mins} mins on {mid}!\nI'll notify you when it's done.")
+        # FIX: Catch double-click error
+        try:
+            await query.edit_message_text(f"✅ Timer started for {mins} mins on {mid}!\nI'll notify you when it's done.")
+        except BadRequest as e:
+            if "Message is not modified" not in str(e): raise e
         return
 
     # FORCE STOP
@@ -505,5 +510,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("collect_"):
         mid = data.replace("collect_", "")
         services.make_machine_available(mid)
-        await query.edit_message_text(f"✅ Machine {mid} marked as Available.\nThank you for collecting your laundry!")
+        # FIX: Catch double-click error
+        try:
+            await query.edit_message_text(f"✅ Machine {mid} marked as Available.\nThank you for collecting your laundry!")
+        except BadRequest as e:
+            if "Message is not modified" not in str(e): raise e
         return
