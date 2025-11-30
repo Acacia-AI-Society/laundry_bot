@@ -68,8 +68,8 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user = services.get_user(user.id)
     
-    # If not registered, default to Level 11 view or ask to register
-    level_to_show = db_user.level if db_user else "11"
+    # If not registered, default to Level 9 view or ask to register
+    level_to_show = db_user.level if db_user else "9"
     
     # Handle "Show All" toggle via callback arg or default
     machines = services.get_machines_by_level(level_to_show)
@@ -92,8 +92,7 @@ async def send_level_selection_menu(update: Update, context: ContextTypes.DEFAUL
     
     # Navigation Buttons to switch levels
     nav_row = [
-        InlineKeyboardButton("Lvl 11", callback_data="view_lvl_11"),
-        InlineKeyboardButton("Lvl 14", callback_data="view_lvl_14"),
+        InlineKeyboardButton("Lvl 9", callback_data="view_lvl_9"),
         InlineKeyboardButton("Lvl 17", callback_data="view_lvl_17"),
     ]
     keyboard.append(nav_row)
@@ -159,11 +158,10 @@ async def handle_registration_text(update: Update, context: ContextTypes.DEFAULT
     reg_data["name"] = update.message.text.strip()
     reg_data["step"] = "LEVEL"
     
-    kb = [[InlineKeyboardButton("Level 11", callback_data="reg_lvl_11"),
-           InlineKeyboardButton("Level 14", callback_data="reg_lvl_14"),
+    kb = [[InlineKeyboardButton("Level 9", callback_data="reg_lvl_9"),
            InlineKeyboardButton("Level 17", callback_data="reg_lvl_17")]]
     
-    await update.message.reply_text(f"Hi {reg_data['name']}! Which level do you live on?", reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text(f"Hi {reg_data['name']}! Which laundry room level do you use?", reply_markup=InlineKeyboardMarkup(kb))
 
 # --- STATUS LOGIC ---
 async def send_status_text(update: Update, context: ContextTypes.DEFAULT_TYPE, machines, level):
@@ -246,7 +244,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     # STATUS VIEW SWITCHING
     if data == "toggle_status_level":
-        kb = [[InlineKeyboardButton(l, callback_data=f"status_view_{l}") for l in ["11", "14", "17"]]]
+        kb = [[InlineKeyboardButton(l, callback_data=f"status_view_{l}") for l in ["9", "17"]]]
         await query.edit_message_text("Select Level to View:", reply_markup=InlineKeyboardMarkup(kb))
         return
 
