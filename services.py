@@ -25,6 +25,7 @@ class MachineState(BaseModel):
     end_time: Optional[datetime.datetime] = None
     current_user: Optional[UserInfo] = None
     last_user: Optional[UserInfo] = None
+    last_ping: Optional[datetime.datetime] = None # Added for persistent cooldown
 
 # --- USER SERVICES ---
 
@@ -41,19 +42,9 @@ def create_user(user_info: UserInfo):
 # --- MACHINE SERVICES ---
 
 def get_machines_by_level(level: str) -> List[MachineState]:
-    # Fetch machines for a specific level
-    # We explicitly join user data to get display names
     query = supabase.table("machines").select(
         "*, current_user:users!current_user_id(*), last_user:users!last_user_id(*)"
     ).eq("level", level).order("id")
-    
-    response = query.execute()
-    return _parse_machines(response.data)
-
-def get_all_machines() -> List[MachineState]:
-    query = supabase.table("machines").select(
-        "*, current_user:users!current_user_id(*), last_user:users!last_user_id(*)"
-    ).order("level").order("id")
     
     response = query.execute()
     return _parse_machines(response.data)
@@ -68,7 +59,6 @@ def get_machine(machine_id: str) -> Optional[MachineState]:
         return _parse_machines(response.data)[0]
     return None
 
-# --- NEW: FOR RESTORING TIMERS ---
 def get_running_machines() -> List[MachineState]:
     """Fetches ONLY machines that are currently marked as Running."""
     query = supabase.table("machines").select(
@@ -85,14 +75,31 @@ def update_machine_status(machine_id: str, status: str, end_time: datetime.datet
         "start_time": datetime.datetime.now().isoformat(),
         "end_time": end_time.isoformat(),
         "current_user_id": user_id,
-        "last_user_id": user_id
+        "last_user_id": user_id,
+        "last_ping": None # Reset ping when new cycle starts
     }).eq("id", machine_id).execute()
 
 def reset_machine_status(machine_id: str):
     # Used when force stopping or marking as finished
     supabase.table("machines").update({
         "status": "Finished",
-        "current_user_id": None # Remove current user ownership (but keep last_user_id implicitly)
+        "current_user_id": None # Remove current user ownership
+    }).eq("id", machine_id).execute()
+
+def make_machine_available(machine_id: str):
+    # Used when user collects laundry
+    supabase.table("machines").update({
+        "status": "Available",
+        "current_user_id": None,
+        "start_time": None,
+        "end_time": None,
+        "last_ping": None # Clear ping history
+    }).eq("id", machine_id).execute()
+
+def register_ping(machine_id: str):
+    # Updates the last_ping timestamp to NOW
+    supabase.table("machines").update({
+        "last_ping": datetime.datetime.now().isoformat()
     }).eq("id", machine_id).execute()
 
 def log_audit_event(event: str, machine_id: str, victim_id: int, offender_id: int):
@@ -109,19 +116,18 @@ def _parse_machines(data: List[Dict]) -> List[MachineState]:
     now = datetime.datetime.now(datetime.timezone.utc)
     
     for row in data:
-        # Pydantic parsing
         current_u = UserInfo(**row['current_user']) if row.get('current_user') else None
         last_u = UserInfo(**row['last_user']) if row.get('last_user') else None
         
-        # Parse timestamp string from DB to datetime object
         end_dt = None
         if row.get('end_time'):
             end_dt = datetime.datetime.fromisoformat(row['end_time'].replace('Z', '+00:00'))
 
+        ping_dt = None
+        if row.get('last_ping'):
+            ping_dt = datetime.datetime.fromisoformat(row['last_ping'].replace('Z', '+00:00'))
+
         status = row['status']
-        
-        # LAZY EVALUATION: If DB says "Running" but time is up, treat as "Finished"
-        # We don't update DB here to save writes, UI just shows it correctly.
         if status == 'Running' and end_dt and end_dt < now:
             status = 'Finished'
             
@@ -133,7 +139,8 @@ def _parse_machines(data: List[Dict]) -> List[MachineState]:
             start_time=row.get('start_time'),
             end_time=end_dt,
             current_user=current_u,
-            last_user=last_u
+            last_user=last_u,
+            last_ping=ping_dt
         )
         results.append(m)
     return results
