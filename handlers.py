@@ -1,7 +1,11 @@
 import datetime
+import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import ContextTypes, Application
 import services
+
+# Setup logger
+logger = logging.getLogger(__name__)
 
 # --- HELPERS ---
 def format_time_delta(end_dt: datetime.datetime):
@@ -25,32 +29,36 @@ async def alarm_5min(context: ContextTypes.DEFAULT_TYPE):
     """Sends a reminder 5 minutes before completion."""
     job = context.job
     try:
+        print(f"⏰ Executing 5-min alarm for {job.data.get('mid')}")
         await context.bot.send_message(
             chat_id=job.chat_id, 
             text=f"⏳ **5 Minutes Left!**\nYour laundry in **{job.data['mid']}** is almost ready.",
             parse_mode="Markdown"
         )
-    except Exception:
-        pass # User might have blocked bot
+    except Exception as e:
+        logger.error(f"❌ Failed to send 5-min alarm: {e}")
 
 async def alarm_done(context: ContextTypes.DEFAULT_TYPE):
     """Sends a notification when laundry is finished."""
     job = context.job
+    mid = job.data.get('mid')
     try:
+        print(f"✅ Executing DONE alarm for {mid}")
+        
+        # Add the 'Collect' button directly to the notification
+        kb = [[InlineKeyboardButton("✅ I collected my laundry", callback_data=f"collect_{mid}")]]
+        
         await context.bot.send_message(
             chat_id=job.chat_id, 
-            text=f"✅ **Laundry Done!**\nYour machine **{job.data['mid']}** is finished.\nPlease collect it immediately!",
-            parse_mode="Markdown"
+            text=f"✅ **Laundry Done!**\nYour machine **{mid}** is finished.\nPlease collect it immediately!",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(kb) # Button added here
         )
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"❌ Failed to send DONE alarm: {e}")
 
 # --- RESTORE TIMERS ON STARTUP ---
 async def restore_timers(application: Application):
-    """
-    Called on bot startup. 
-    Reads 'Running' machines from DB and re-schedules their alarms in RAM.
-    """
     print("🔄 Hydrating Timers from Supabase...")
     running_machines = services.get_running_machines()
     count = 0
@@ -59,32 +67,20 @@ async def restore_timers(application: Application):
     for m in running_machines:
         if not m.end_time or not m.current_user: continue
         
-        # Calculate seconds remaining
         delay = (m.end_time - now).total_seconds()
         user_id = m.current_user.id
         mid = m.id
         
+        if not application.job_queue:
+            print("❌ CRITICAL: Job Queue is not available during restore!")
+            return
+
         if delay > 0:
-            # 1. Restore DONE Job
-            application.job_queue.run_once(
-                alarm_done, 
-                delay, 
-                chat_id=user_id, 
-                data={"mid": mid}, 
-                name=f"done_{mid}"
-            )
-            # 2. Restore 5-MIN Job (if > 5 mins left)
+            application.job_queue.run_once(alarm_done, delay, chat_id=user_id, data={"mid": mid}, name=f"done_{mid}")
             if delay > 300:
-                application.job_queue.run_once(
-                    alarm_5min, 
-                    delay - 300, 
-                    chat_id=user_id, 
-                    data={"mid": mid}, 
-                    name=f"5min_{mid}"
-                )
+                application.job_queue.run_once(alarm_5min, delay - 300, chat_id=user_id, data={"mid": mid}, name=f"5min_{mid}")
             count += 1
         else:
-            # Machine finished while bot was sleeping/restarting!
             print(f"⚠️ Missed alarm for {mid}. Sending immediate notification.")
             application.job_queue.run_once(alarm_done, 1, chat_id=user_id, data={"mid": mid}, name=f"done_{mid}")
             
@@ -104,11 +100,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Forces the user back into the registration flow.
-    """
     context.user_data["registration"] = {"step": "NAME", "pending_machine": None}
-    
     await update.message.reply_text(
         "🔄 **Update Profile**\n\n"
         "Let's set up your details again.\n\n"
@@ -121,26 +113,17 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db_user = services.get_user(user.id)
     args = context.args
 
-    # 1. Not Registered -> Onboarding
     if not db_user:
         context.user_data["registration"] = {"step": "NAME", "pending_machine": args[0] if args else None}
-        
-        intro_text = (
-            "👋 **Welcome to the Hostel Laundry Bot!**\n\n"
-            "I am here to help you track washer/dryer availability and set timers so you never miss your laundry.\n\n"
-            "To get started, I just need a few details to set up your profile."
-        )
+        intro_text = "👋 **Welcome to the Hostel Laundry Bot!**\n\nI am here to help you track washer/dryer availability and set timers.\n\nTo get started, I just need a few details."
         await update.message.reply_text(intro_text, parse_mode="Markdown")
-        
         await update.message.reply_text("**1. What is your Name?** (Please type it below)", parse_mode="Markdown")
         return
 
-    # 2. Registered + Deep Link -> Show Machine
     if args:
         await show_machine_control_panel(update, context, args[0])
         return
 
-    # 3. Registered + No Args -> Welcome
     await update.message.reply_text(
         f"👋 Welcome back, {db_user.display_name} (Level {db_user.level})!\nUse /menu to start laundry.",
         parse_mode="Markdown"
@@ -149,43 +132,36 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user = services.get_user(user.id)
-    
     if not db_user:
         await update.message.reply_text("⚠️ Please /start to register first.")
         return
-
-    # By default, show ONLY the user's level
     await send_level_selection_menu(update, context, db_user.level)
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user = services.get_user(user.id)
-    
-    # If not registered, default to Level 9 view or ask to register
     level_to_show = db_user.level if db_user else "9"
-    
-    # Handle "Show All" toggle via callback arg or default
     machines = services.get_machines_by_level(level_to_show)
-    
     await send_status_text(update, context, machines, level_to_show)
 
 # --- MENUS & UIs ---
 
 async def send_level_selection_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, level: str):
-    # Generates grid for specific level with Dynamic Status Icons
+    # Generates grid for specific level
     machines = services.get_machines_by_level(level)
     status_map = {m.id: m.status for m in machines}
 
+    # 1. UPDATED ICONS FOR ACCESSIBILITY
     def get_btn_text(type_short, type_key, index):
         mid = f"{level}_{type_key}_{index}"
         status = status_map.get(mid, "Available")
         
         if status == "Running":
-            return f"🔴 {type_short}{index}"
+            return f"❌ {type_short}{index}" # Cross = Occupied
         elif status == "Finished":
-            return f"🟡 {type_short}{index}"
+            return f"⚠️ {type_short}{index}" # Warning = Action Needed (Collect)
         else:
-            return f"🟢 {type_short}{index}"
+            return f"✅ {type_short}{index}" # Tick = Available
 
     keyboard = []
     # Washers 1-5
@@ -197,14 +173,13 @@ async def send_level_selection_menu(update: Update, context: ContextTypes.DEFAUL
     
     keyboard.extend([row1, row2, row3, row4])
     
-    # Navigation Buttons to switch levels
     nav_row = [
         InlineKeyboardButton("Lvl 9", callback_data="view_lvl_9"),
         InlineKeyboardButton("Lvl 17", callback_data="view_lvl_17"),
     ]
     keyboard.append(nav_row)
 
-    text = f"👇 **Select Machine (Level {level})**\n\n🟢 Available  🔴 Running  🟡 Finished"
+    text = f"👇 **Select Machine (Level {level})**\n\n✅ Available  ❌ Running  ⚠️ Finished"
     markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
@@ -220,12 +195,15 @@ async def show_machine_control_panel(update: Update, context: ContextTypes.DEFAU
 
     now = datetime.datetime.now(datetime.timezone.utc)
     
-    # CONFLICT CHECK: Machine is running and time not up
     if machine.status == 'Running' and machine.end_time and machine.end_time > now:
         mins_left = format_time_delta(machine.end_time)
         user_name = machine.current_user.display_name if machine.current_user else "Unknown"
         
-        kb = [[InlineKeyboardButton("⚠️ Force Stop & Take Over", callback_data=f"force_{machine_id}")]]
+        # Add Cancel/Back button even in conflict mode
+        kb = [
+            [InlineKeyboardButton("⚠️ Force Stop & Take Over", callback_data=f"force_{machine_id}")],
+            [InlineKeyboardButton("🔙 Cancel", callback_data=f"view_lvl_{machine.level}")]
+        ]
         msg = (f"⚠️ **Conflict!** {machine.type} {machine_id} is running.\n"
                f"👤 User: {user_name}\n⏳ Left: {mins_left}m")
         
@@ -251,9 +229,7 @@ async def show_machine_control_panel(update: Update, context: ContextTypes.DEFAU
             prev_user = machine.last_user.display_name if machine.last_user else "Unknown"
             prev_msg = f"\n(Ready {ago}m ago. Last: {prev_user})"
             
-            # --- PING BUTTON LOGIC ---
             if machine.last_user:
-                # Check Cooldown
                 last_pings = context.bot_data.setdefault("pings", {})
                 last_time = last_pings.get(machine_id)
                 now_local = datetime.datetime.now()
@@ -264,18 +240,19 @@ async def show_machine_control_panel(update: Update, context: ContextTypes.DEFAU
                 if last_time and (now_local - last_time).total_seconds() < 200:
                     remaining = 200 - int((now_local - last_time).total_seconds())
                     ping_btn_text = f"⏳ Wait {remaining}s to Ping"
-                    callback = "ignore_ping" # No-op callback
+                    callback = "ignore_ping" 
                     
                 kb.append([InlineKeyboardButton(ping_btn_text, callback_data=callback)])
         
-        # --- COLLECT BUTTON LOGIC (RESTRICTED TO OWNER) ---
         user = update.effective_user
         if machine.last_user and machine.last_user.id == user.id:
             kb.append([InlineKeyboardButton("✅ I collected my laundry", callback_data=f"collect_{machine_id}")])
 
+    # 2. ADDED CANCEL BUTTON
+    kb.append([InlineKeyboardButton("🔙 Cancel", callback_data=f"view_lvl_{machine.level}")])
+
     msg = f"⚙️ **{machine.level} {machine.type} {machine.id.split('_')[-1]}**\n{prev_msg}\nSelect duration:"
     
-    # If a ping was just sent, append status
     if ping_status:
         msg += f"\n\n{ping_status}"
 
@@ -302,24 +279,23 @@ async def send_status_text(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     response = f"📊 **Laundry Status (Level {level})**\n\n"
     now = datetime.datetime.now(datetime.timezone.utc)
     
-    # Separate Washers and Dryers
     washers = [m for m in machines if m.type == 'Washer']
     dryers = [m for m in machines if m.type == 'Dryer']
     
     def format_line(m):
-        icon = "🟢"
+        icon = "✅"
         status = "Available"
         user_info = ""
         
         if m.status == 'Running':
             left = format_time_delta(m.end_time)
-            icon = "🔴"
+            icon = "❌"
             status = f"Running ({left}m left)"
             if m.current_user: user_info = f"   └ {m.current_user.display_name}"
             
         elif m.status == 'Finished':
             ago = format_time_delta(m.end_time)
-            icon = "🟡"
+            icon = "⚠️"
             status = f"Ready ({ago}m ago)"
             if m.last_user: user_info = f"   └ {m.last_user.display_name}"
             
@@ -329,7 +305,6 @@ async def send_status_text(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     response += "------------------\n"
     for d in dryers: response += format_line(d) + "\n"
     
-    # Add "Switch Level View" toggle
     kb = [[InlineKeyboardButton("Switch Level View", callback_data="toggle_status_level")]]
     
     if update.callback_query:
@@ -365,7 +340,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         house = data.split("_")[-1]
         reg = context.user_data["registration"]
         
-        # Save to Supabase
         new_user = services.UserInfo(
             id=user.id, username=user.username or "", first_name=user.first_name or "",
             display_name=reg["name"], level=reg["level"], house=house
@@ -411,7 +385,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # SCHEDULE NOTIFICATIONS
         if context.job_queue:
-            # 1. Completion Job
+            print(f"🕒 Scheduling {mins}m timer for {mid}")
             context.job_queue.run_once(
                 alarm_done, 
                 mins * 60, 
@@ -419,7 +393,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 data={"mid": mid}, 
                 name=f"done_{mid}"
             )
-            # 2. 5-Min Warning (Only if duration > 5 mins)
             if mins > 5:
                 context.job_queue.run_once(
                     alarm_5min, 
@@ -428,6 +401,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     data={"mid": mid}, 
                     name=f"5min_{mid}"
                 )
+        else:
+            print("❌ CRITICAL: No JobQueue found in context! Notifications will FAIL.")
 
         await query.edit_message_text(f"✅ Timer started for {mins} mins on {mid}!\nI'll notify you when it's done.")
         return
@@ -442,7 +417,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(machine.current_user.id, f"🚨 Your machine {mid} was stopped by {user.first_name}.")
             except: pass
             
-            # CANCEL PENDING JOBS for this machine
             if context.job_queue:
                 for job in context.job_queue.get_jobs_by_name(f"done_{mid}"): job.schedule_removal()
                 for job in context.job_queue.get_jobs_by_name(f"5min_{mid}"): job.schedule_removal()
@@ -455,7 +429,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("ping_"):
         mid = data.replace("ping_", "")
         
-        # Rate Limiting (200 seconds)
         last_pings = context.bot_data.setdefault("pings", {})
         last_time = last_pings.get(mid)
         now = datetime.datetime.now()
@@ -475,13 +448,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 await query.answer("🔔 Ping sent!", show_alert=True)
                 last_pings[mid] = now
+                services.register_ping(mid)
             except:
                 ping_msg = "❌ Failed to Ping (User Blocked Bot)"
                 await query.answer("❌ Could not reach user.", show_alert=True)
         else:
              await query.answer("❌ No user history.", show_alert=True)
         
-        # Refresh the menu to update button to "Wait" state
         await show_machine_control_panel(update, context, mid, ping_status=ping_msg)
         return
 
