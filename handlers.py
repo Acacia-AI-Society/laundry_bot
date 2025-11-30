@@ -11,6 +11,7 @@ logger = logging.getLogger(__name__)
 # --- HELPERS ---
 def format_time_delta(end_dt: datetime.datetime):
     if not end_dt: return 0
+    # FIX: Always use UTC to match Database
     now = datetime.datetime.now(datetime.timezone.utc)
     diff = now - end_dt if now > end_dt else end_dt - now
     return int(diff.total_seconds() / 60)
@@ -77,12 +78,12 @@ async def restore_timers(application: Application):
         return
 
     count = 0
+    # FIX: Use UTC for consistency during hydration
     now = datetime.datetime.now(datetime.timezone.utc)
     
     print(f"📄 Found {len(running_machines)} machines marked as 'Running' in DB.")
 
     for m in running_machines:
-        # Debugging: Print why we might skip
         if not m.end_time:
             print(f"⚠️ Skipping {m.id}: No end_time found.")
             continue
@@ -90,7 +91,7 @@ async def restore_timers(application: Application):
             print(f"⚠️ Skipping {m.id}: No current_user found (Check DB join).")
             continue
         
-        # Calculate seconds remaining
+        # Calculate seconds remaining (Both are UTC now)
         delay = (m.end_time - now).total_seconds()
         user_id = m.current_user.id
         mid = m.id
@@ -231,6 +232,7 @@ async def show_machine_control_panel(update: Update, context: ContextTypes.DEFAU
         await context.bot.send_message(update.effective_chat.id, "❌ Machine not found.")
         return
 
+    # FIX: Use UTC for consistency
     now = datetime.datetime.now(datetime.timezone.utc)
     
     if machine.status == 'Running' and machine.end_time and machine.end_time > now:
@@ -268,15 +270,16 @@ async def show_machine_control_panel(update: Update, context: ContextTypes.DEFAU
             prev_msg = f"\n(Ready {ago}m ago. Last: {prev_user})"
             
             if machine.last_user:
-                last_pings = context.bot_data.setdefault("pings", {})
-                last_time = last_pings.get(machine_id)
-                now_local = datetime.datetime.now()
+                # FIX: Use DB Timestamp (UTC) for persistent cooldowns
+                last_time = machine.last_ping
+                # FIX: Use UTC for current time comparison
+                now_utc = datetime.datetime.now(datetime.timezone.utc)
                 
                 ping_btn_text = "🔔 Ping Owner (Hurry up!)"
                 callback = f"ping_{machine_id}"
                 
-                if last_time and (now_local - last_time).total_seconds() < 200:
-                    remaining = 200 - int((now_local - last_time).total_seconds())
+                if last_time and (now_utc - last_time).total_seconds() < 200:
+                    remaining = 200 - int((now_utc - last_time).total_seconds())
                     ping_btn_text = f"⏳ Wait {remaining}s to Ping"
                     callback = "ignore_ping" 
                     
@@ -418,6 +421,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mid = parts[0].replace("set_", "")
         mins = int(parts[1])
         
+        # FIX: Use UTC
         end_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=mins)
         services.update_machine_status(mid, "Running", end_time, user.id)
         
@@ -467,16 +471,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("ping_"):
         mid = data.replace("ping_", "")
         
-        last_pings = context.bot_data.setdefault("pings", {})
-        last_time = last_pings.get(mid)
-        now = datetime.datetime.now()
+        # FIX: Robust Cooldown Check using DB and UTC
+        machine = services.get_machine(mid)
+        last_time = machine.last_ping
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
         
-        if last_time and (now - last_time).total_seconds() < 200:
-            remaining = 200 - int((now - last_time).total_seconds())
+        if last_time and (now_utc - last_time).total_seconds() < 200:
+            remaining = 200 - int((now_utc - last_time).total_seconds())
             await query.answer(f"⏳ Cooldown! Wait {remaining}s.", show_alert=True)
             return
             
-        machine = services.get_machine(mid)
         ping_msg = "✅ Ping Sent!"
         if machine.last_user:
             try:
@@ -485,7 +489,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     text=f"🔔 **PING!**\nSomeone is waiting for **{mid}**. Please collect your laundry immediately!"
                 )
                 await query.answer("🔔 Ping sent!", show_alert=True)
-                last_pings[mid] = now
+                
+                # FIX: Register ping in DB via Service
                 services.register_ping(mid)
             except:
                 ping_msg = "❌ Failed to Ping (User Blocked Bot)"
