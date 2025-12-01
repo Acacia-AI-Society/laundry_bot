@@ -1,5 +1,6 @@
 import datetime
 import logging
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import ContextTypes, Application
 from telegram.error import BadRequest
@@ -8,6 +9,14 @@ import services
 # Setup logger
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# --- LOAD HELP TEXT ---
+try:
+    with open("bot_help.md", "r", encoding="utf-8") as f:
+        HELP_TEXT = f.read()
+except FileNotFoundError:
+    HELP_TEXT = "Help file not found. Please contact admin."
+    logger.error("bot_help.md not found!")
 
 # --- HELPERS ---
 def format_time_delta(end_dt: datetime.datetime):
@@ -32,7 +41,8 @@ def format_machine_name(mid: str):
 def escape_md(text: str) -> str:
     """Helper to escape Markdown special chars (prevents crashes with usernames like @john_doe)."""
     if not text: return ""
-    return str(text).replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
+    escaped = str(text).replace("\\", "\\\\")
+    return escaped.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
 
 async def set_bot_commands(application):
     commands = [
@@ -40,7 +50,7 @@ async def set_bot_commands(application):
         BotCommand("menu", "Select Machine (Start Laundry)"),
         BotCommand("status", "Check Status"),
         BotCommand("reset", "Update Profile (Re-Onboard)"),
-        BotCommand("help", "Show Help")
+        BotCommand("help", "Show User Guide")
     ]
     await application.bot.set_my_commands(commands)
 
@@ -53,7 +63,7 @@ async def alarm_5min(context: ContextTypes.DEFAULT_TYPE):
         print(f"⏰ Executing 5-min alarm for {mid}")
         await context.bot.send_message(
             chat_id=job.chat_id, 
-            text=f"⏳ **5 Minutes Left!**\nYour laundry in **{display_name}** is almost ready.",
+            text=f"⏳ *5 Minutes Left!*\nYour laundry in *{display_name}* is almost ready.",
             parse_mode="Markdown"
         )
     except Exception as e:
@@ -68,7 +78,7 @@ async def alarm_done(context: ContextTypes.DEFAULT_TYPE):
         kb = [[InlineKeyboardButton("✅ I collected my laundry", callback_data=f"collect_{mid}")]]
         await context.bot.send_message(
             chat_id=job.chat_id, 
-            text=f"✅ **Laundry Done!**\nYour machine **{display_name}** is finished.\nPlease collect it immediately!",
+            text=f"✅ *Laundry Done!*\nYour machine *{display_name}* is finished.\nPlease collect it immediately!",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(kb)
         )
@@ -113,20 +123,13 @@ async def restore_timers(application: Application):
 
 # --- COMMANDS ---
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "🤖 **Hostel Laundry Bot Help**\n\n"
-        "🟢 **/start** - Register/Onboard\n"
-        "🔄 **/reset** - Change your Name/Level/House\n"
-        "🧺 **/menu** - Select a machine to START\n"
-        "📊 **/status** - View machine status (Your Level)\n"
-        "❓ **/help** - Show this message"
-    )
-    await update.message.reply_text(text, parse_mode="Markdown")
+    # Sends the content loaded from bot_help.md
+    await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
 
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["registration"] = {"step": "NAME", "pending_machine": None}
     await update.message.reply_text(
-        "🔄 **Update Profile**\n\nLet's set up your details again.\n\n**1. What is your Name?** (Please type it below)",
+        "🔄 *Update Profile*\n\nLet's set up your details again.\n\n*1. What is your Name?* (Please type it below)",
         parse_mode="Markdown"
     )
 
@@ -137,9 +140,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not db_user:
         context.user_data["registration"] = {"step": "NAME", "pending_machine": args[0] if args else None}
-        intro_text = "👋 **Welcome to the Hostel Laundry Bot!**\n\nI am here to help you track washer/dryer availability and set timers.\n\nTo get started, I just need a few details."
+        intro_text = "👋 *Welcome to the Hostel Laundry Bot!*\n\nI am here to help you track washer/dryer availability and set timers.\n\nTo get started, I just need a few details."
         await update.message.reply_text(intro_text, parse_mode="Markdown")
-        await update.message.reply_text("**1. What is your Name?** (Please type it below)", parse_mode="Markdown")
+        await update.message.reply_text("*1. What is your Name?* (Please type it below)", parse_mode="Markdown")
         return
 
     if args:
@@ -192,7 +195,7 @@ async def send_level_selection_menu(update: Update, context: ContextTypes.DEFAUL
     ]
     keyboard.append(nav_row)
 
-    text = f"👇 **Select Machine (Level {level})**\n\n✅ Available  ❌ Running  ⚠️ Finished"
+    text = f"👇 *Select Machine (Level {level})*\n\n✅ Available  ❌ Running  ⚠️ Finished"
     markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
@@ -217,7 +220,7 @@ async def show_machine_control_panel(update: Update, context: ContextTypes.DEFAU
             [InlineKeyboardButton("⚠️ Force Stop & Take Over", callback_data=f"force_{machine_id}")],
             [InlineKeyboardButton("🔙 Cancel", callback_data=f"view_lvl_{machine.level}")]
         ]
-        msg = (f"⚠️ **Conflict!** {display_name} is running.\n"
+        msg = (f"⚠️ *Conflict!* {display_name} is running.\n"
                f"👤 User: {user_name}\n⏳ Left: {mins_left}m")
         
         if update.callback_query:
@@ -262,7 +265,7 @@ async def show_machine_control_panel(update: Update, context: ContextTypes.DEFAU
 
     kb.append([InlineKeyboardButton("🔙 Cancel", callback_data=f"view_lvl_{machine.level}")])
 
-    msg = f"⚙️ **{display_name}**\n{prev_msg}\nSelect duration:"
+    msg = f"⚙️ *{display_name}*\n{prev_msg}\nSelect duration:"
     
     if ping_status:
         msg += f"\n\n{ping_status}"
@@ -288,7 +291,7 @@ async def handle_registration_text(update: Update, context: ContextTypes.DEFAULT
 
 # --- STATUS LOGIC ---
 async def send_status_text(update: Update, context: ContextTypes.DEFAULT_TYPE, machines, level):
-    response = f"📊 **Laundry Status (Level {level})**\n\n"
+    response = f"📊 *Laundry Status (Level {level})*\n\n"
     washers = [m for m in machines if m.type == 'Washer']
     dryers = [m for m in machines if m.type == 'Dryer']
     
@@ -314,7 +317,7 @@ async def send_status_text(update: Update, context: ContextTypes.DEFAULT_TYPE, m
                 clean_name = escape_md(m.last_user.display_name)
                 user_info = f"   └ {clean_name}"
             
-        return f"{icon} **{name}**: {status}\n{user_info}"
+        return f"{icon} *{name}*: {status}\n{user_info}"
 
     for w in washers: response += format_line(w) + "\n"
     response += "------------------\n"
@@ -441,7 +444,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id=machine.last_user.id,
-                    text=f"🔔 **PING!**\nSomeone is waiting for **{display_name}**. Please collect your laundry immediately!"
+                    text=f"🔔 *PING!*\nSomeone is waiting for *{display_name}*. Please collect your laundry immediately!"
                 )
                 await query.answer("🔔 Ping sent!", show_alert=True)
                 
@@ -451,7 +454,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 handle = escape_md(f" (@{u.username})") if u.username else ""
                 clean_name = escape_md(u.display_name)
                 clean_house = escape_md(u.house)
-                ping_msg = f"✅ Ping sent to **{clean_name}** ({clean_house}){handle}! Message or call them if needed."
+                ping_msg = f"✅ Ping sent to *{clean_name}* ({clean_house}){handle}!"
                 
             except:
                 ping_msg = "❌ Failed to Ping (User Blocked Bot)"
