@@ -17,6 +17,19 @@ def format_time_delta(end_dt: datetime.datetime):
     diff = now - end_dt if now > end_dt else end_dt - now
     return int(diff.total_seconds() / 60)
 
+def format_machine_name(mid: str):
+    """Converts '17_dryer_1' to 'Lvl17 Dryer 1' for display."""
+    try:
+        parts = mid.split('_') # ['17', 'dryer', '1']
+        if len(parts) >= 3:
+            level = parts[0]
+            mtype = parts[1].capitalize()
+            idx = parts[2]
+            return f"Lvl{level} {mtype} {idx}"
+        return mid
+    except:
+        return mid
+
 async def set_bot_commands(application):
     commands = [
         BotCommand("start", "Register / Welcome"),
@@ -31,11 +44,13 @@ async def set_bot_commands(application):
 async def alarm_5min(context: ContextTypes.DEFAULT_TYPE):
     """Sends a reminder 5 minutes before completion."""
     job = context.job
+    mid = job.data.get('mid')
+    display_name = format_machine_name(mid)
     try:
-        print(f"⏰ Executing 5-min alarm for {job.data.get('mid')}")
+        print(f"⏰ Executing 5-min alarm for {mid}")
         await context.bot.send_message(
             chat_id=job.chat_id, 
-            text=f"⏳ **5 Minutes Left!**\nYour laundry in **{job.data['mid']}** is almost ready.",
+            text=f"⏳ **5 Minutes Left!**\nYour laundry in **{display_name}** is almost ready.",
             parse_mode="Markdown"
         )
     except Exception as e:
@@ -45,6 +60,7 @@ async def alarm_done(context: ContextTypes.DEFAULT_TYPE):
     """Sends a notification when laundry is finished."""
     job = context.job
     mid = job.data.get('mid')
+    display_name = format_machine_name(mid)
     try:
         print(f"✅ Executing DONE alarm for {mid}")
         
@@ -53,7 +69,7 @@ async def alarm_done(context: ContextTypes.DEFAULT_TYPE):
         
         await context.bot.send_message(
             chat_id=job.chat_id, 
-            text=f"✅ **Laundry Done!**\nYour machine **{mid}** is finished.\nPlease collect it immediately!",
+            text=f"✅ **Laundry Done!**\nYour machine **{display_name}** is finished.\nPlease collect it immediately!",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(kb)
         )
@@ -235,6 +251,7 @@ async def show_machine_control_panel(update: Update, context: ContextTypes.DEFAU
 
     # FIX: Use UTC for consistency
     now = datetime.datetime.now(datetime.timezone.utc)
+    display_name = format_machine_name(machine.id)
     
     if machine.status == 'Running' and machine.end_time and machine.end_time > now:
         mins_left = format_time_delta(machine.end_time)
@@ -245,7 +262,7 @@ async def show_machine_control_panel(update: Update, context: ContextTypes.DEFAU
             [InlineKeyboardButton("⚠️ Force Stop & Take Over", callback_data=f"force_{machine_id}")],
             [InlineKeyboardButton("🔙 Cancel", callback_data=f"view_lvl_{machine.level}")]
         ]
-        msg = (f"⚠️ **Conflict!** {machine.type} {machine_id} is running.\n"
+        msg = (f"⚠️ **Conflict!** {display_name} is running.\n"
                f"👤 User: {user_name}\n⏳ Left: {mins_left}m")
         
         if update.callback_query:
@@ -254,14 +271,14 @@ async def show_machine_control_panel(update: Update, context: ContextTypes.DEFAU
             await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
         return
 
-    # STANDARD MENU
+    # STANDARD MENU - UPDATED TIMINGS
     kb = []
     if machine.type == "Washer":
-        kb = [[InlineKeyboardButton("30 Mins", callback_data=f"set_{machine_id}_30"),
-               InlineKeyboardButton("35 Mins", callback_data=f"set_{machine_id}_35")]]
+        kb = [[InlineKeyboardButton("33 Mins", callback_data=f"set_{machine_id}_33"),
+               InlineKeyboardButton("39 Mins", callback_data=f"set_{machine_id}_39")]]
     else:
-        kb = [[InlineKeyboardButton("30 Mins", callback_data=f"set_{machine_id}_30"),
-               InlineKeyboardButton("1 Hour", callback_data=f"set_{machine_id}_60")]]
+        kb = [[InlineKeyboardButton("35 Mins", callback_data=f"set_{machine_id}_35"),
+               InlineKeyboardButton("70 Mins", callback_data=f"set_{machine_id}_70")]]
     
     prev_msg = ""
     if machine.status == 'Finished':
@@ -293,7 +310,7 @@ async def show_machine_control_panel(update: Update, context: ContextTypes.DEFAU
     # 2. ADDED CANCEL BUTTON
     kb.append([InlineKeyboardButton("🔙 Cancel", callback_data=f"view_lvl_{machine.level}")])
 
-    msg = f"⚙️ **{machine.level} {machine.type} {machine.id.split('_')[-1]}**\n{prev_msg}\nSelect duration:"
+    msg = f"⚙️ **{display_name}**\n{prev_msg}\nSelect duration:"
     
     if ping_status:
         msg += f"\n\n{ping_status}"
@@ -328,6 +345,7 @@ async def send_status_text(update: Update, context: ContextTypes.DEFAULT_TYPE, m
         icon = "✅"
         status = "Available"
         user_info = ""
+        name = format_machine_name(m.id) # Use Helper Name
         
         if m.status == 'Running':
             left = format_time_delta(m.end_time)
@@ -341,7 +359,7 @@ async def send_status_text(update: Update, context: ContextTypes.DEFAULT_TYPE, m
             status = f"Ready ({ago}m ago)"
             if m.last_user: user_info = f"   └ {m.last_user.display_name}"
             
-        return f"{icon} **{m.id}**: {status}\n{user_info}"
+        return f"{icon} **{name}**: {status}\n{user_info}"
 
     for w in washers: response += format_line(w) + "\n"
     response += "------------------\n"
@@ -475,6 +493,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # PING OWNER
     if data.startswith("ping_"):
         mid = data.replace("ping_", "")
+        display_name = format_machine_name(mid)
         
         # FIX: Robust Cooldown Check using DB and UTC
         machine = services.get_machine(mid)
@@ -491,12 +510,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await context.bot.send_message(
                     chat_id=machine.last_user.id,
-                    text=f"🔔 **PING!**\nSomeone is waiting for **{mid}**. Please collect your laundry immediately!"
+                    text=f"🔔 **PING!**\nSomeone is waiting for **{display_name}**. Please collect your laundry immediately!"
                 )
                 await query.answer("🔔 Ping sent!", show_alert=True)
                 
                 # FIX: Register ping in DB via Service
                 services.register_ping(mid)
+                
+                # NEW: Add user details for manual contact
+                u = machine.last_user
+                handle = f" (@{u.username})" if u.username else ""
+                ping_msg = f"✅ Ping sent to **{u.display_name}** ({u.house}){handle}! Message or call them if needed."
+                
             except:
                 ping_msg = "❌ Failed to Ping (User Blocked Bot)"
                 await query.answer("❌ Could not reach user.", show_alert=True)
@@ -510,7 +535,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("collect_"):
         mid = data.replace("collect_", "")
         services.make_machine_available(mid)
-        # FIX: Catch double-click error
         try:
             await query.edit_message_text(f"✅ Machine {mid} marked as Available.\nThank you for collecting your laundry!")
         except BadRequest as e:
