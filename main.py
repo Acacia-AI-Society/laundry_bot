@@ -16,7 +16,7 @@ ptb_app = Application.builder().token(config.TOKEN).build() if config.TOKEN else
 
 def register_handlers(application):
     application.add_handler(CommandHandler("start", handlers.start_command))
-    application.add_handler(CommandHandler("reset", handlers.reset_command)) # Added reset
+    application.add_handler(CommandHandler("reset", handlers.reset_command))
     application.add_handler(CommandHandler("menu", handlers.menu_command))
     application.add_handler(CommandHandler("status", handlers.status_command))
     application.add_handler(CommandHandler("help", handlers.help_command))
@@ -30,6 +30,8 @@ async def startup_event():
         await ptb_app.initialize()
         await ptb_app.start()
         await handlers.set_bot_commands(ptb_app)
+        # --- RESTORE TIMERS FROM DB ---
+        await handlers.restore_timers(ptb_app)
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
@@ -39,9 +41,21 @@ async def telegram_webhook(request: Request):
     await ptb_app.process_update(update)
     return {"status": "ok"}
 
+# --- NEW: HEALTH CHECK ENDPOINT ---
+# BetterStack/UptimeRobot will ping this using GET to keep the server awake
+@app.get("/")
+async def health_check():
+    return "OK"
+
 # Local Polling
 if __name__ == "__main__":
     if ptb_app:
         print("🚀 Starting Polling Mode...")
         register_handlers(ptb_app)
+        
+        async def post_init(app):
+            await handlers.set_bot_commands(app)
+            await handlers.restore_timers(app)
+            
+        ptb_app.post_init = post_init
         ptb_app.run_polling()
