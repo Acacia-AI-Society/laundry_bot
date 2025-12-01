@@ -4,14 +4,13 @@ Welcome to the new and improved Laundry Bot! This system helps you track washer/
 
 🚀 *Getting Started (One-Time Setup)*
 
-1. *Start the Bot:* Scan the QR code on any machine OR search for the bot in Telegram and tap Start.
+1. *Start the Bot:* Search for the bot in Telegram and tap Start.
 2. *Register:* The bot will ask for your Name, Laundry Level (9 or 17), and House.
 
 🟢 *How to Use*
 
 *1. Start a Wash/Dry Cycle*
-• *Method A (Preferred):* Scan the QR code on the machine.
-• *Method B:* Send the command /menu and select your machine from the grid.
+• *Select Menu Command* Send the command /menu and select your machine from the grid.
 • *Select Duration:* Choose the cycle time (Timer includes approximated cooldown duration).
 • ✅ *Done!* The bot will notify you when 5 minutes are left and when it is Finished.
 
@@ -19,7 +18,7 @@ Welcome to the new and improved Laundry Bot! This system helps you track washer/
 Send the command /status to see a live dashboard.
 • ✅ Available: Free to use.
 • ❌ Running: Currently in use (shows time remaining).
-• ⚠️ Finished: Cycle done, but clothes are still inside.
+• ⚠️ Finished: Cycle done, but clothes from previous user might still be inside.
 
 *3. Collecting Laundry (Important!)*
 When your laundry is done, the bot will send you a message with a button:
@@ -47,3 +46,4 @@ Is a machine marked as Finished (⚠️) but full of clothes?
 💡 *Pro-Tips*
 • *Wrong Level?* You can switch between Level 9 and Level 17 views directly in the /menu.
 • *Conflict?* If a machine is running physically but the bot says "Available", just override it. If the bot says "Running" but it's empty, use the "Force Stop" button (this alerts the previous user).
+• *Override?* If a machine is available to use and previous user has collected their laundry, press the take over button to start your own timer.
