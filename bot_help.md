@@ -22,7 +22,7 @@ Send the command /status to see a live dashboard.
 
 *3. Collecting Laundry (Important!)*
 When your laundry is done, the bot will send you a message with a button:
-👉 \[✅ I collected my laundry\]
+👉 \[✅ I collected my laundry]
 
 Please click this button after emptying the machine. This resets the status to "Available" for the next person.
 
@@ -33,7 +33,7 @@ Is a machine marked as Finished (⚠️) but full of clothes?
 1. Select that machine in the /menu.
 2. Click 🔔 Ping Owner (Hurry up!).
 3. The bot will anonymously message the previous user: "Someone is waiting for your machine!"
-4. Cooldown: You can only ping once every few minutes to prevent spam.
+4. Cooldown: You can only ping once every 200 seconds to prevent spam. If needed, feel free to message or call them using the telegram handle provided in the pinged message.
 
 ⚙️ *Commands Reference*
 
