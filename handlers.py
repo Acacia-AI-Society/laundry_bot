@@ -451,7 +451,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 handle = escape_md(f" (@{u.username})") if u.username else ""
                 clean_name = escape_md(u.display_name)
                 clean_house = escape_md(u.house)
-                ping_msg = f"✅ Ping sent to **{clean_name}** ({clean_house}){handle}!"
+                ping_msg = f"✅ Ping sent to **{clean_name}** ({clean_house}){handle}! Message or call them if needed."
                 
             except:
                 ping_msg = "❌ Failed to Ping (User Blocked Bot)"
