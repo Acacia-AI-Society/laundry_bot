@@ -1,6 +1,5 @@
 import datetime
 import logging
-import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import ContextTypes, Application
 from telegram.error import BadRequest
@@ -9,14 +8,6 @@ import services
 # Setup logger
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# --- LOAD HELP TEXT ---
-try:
-    with open("bot_help.md", "r", encoding="utf-8") as f:
-        HELP_TEXT = f.read()
-except FileNotFoundError:
-    HELP_TEXT = "Help file not found. Please contact admin."
-    logger.error("bot_help.md not found!")
 
 # --- HELPERS ---
 def format_time_delta(end_dt: datetime.datetime):
@@ -39,10 +30,20 @@ def format_machine_name(mid: str):
         return mid
 
 def escape_md(text: str) -> str:
-    """Helper to escape Markdown special chars (prevents crashes with usernames like @john_doe)."""
+    """Helper to escape Markdown special chars."""
     if not text: return ""
     escaped = str(text).replace("\\", "\\\\")
     return escaped.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
+
+async def safe_edit_message(message, text, reply_markup=None, parse_mode="Markdown"):
+    """Safely edits a message, ignoring 'Message is not modified' errors."""
+    try:
+        await message.edit_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    except BadRequest as e:
+        if "Message is not modified" in str(e):
+            pass # Ignore legitimate no-op edits
+        else:
+            raise e # Raise other real errors
 
 async def set_bot_commands(application):
     commands = [
@@ -50,7 +51,7 @@ async def set_bot_commands(application):
         BotCommand("menu", "Select Machine (Start Laundry)"),
         BotCommand("status", "Check Status"),
         BotCommand("reset", "Update Profile (Re-Onboard)"),
-        BotCommand("help", "Show User Guide")
+        BotCommand("help", "Show Help")
     ]
     await application.bot.set_my_commands(commands)
 
@@ -122,8 +123,13 @@ async def restore_timers(application: Application):
     print(f"✅ Successfully restored {count} active timers.")
 
 # --- COMMANDS ---
+try:
+    with open("bot_help.md", "r", encoding="utf-8") as f:
+        HELP_TEXT = f.read()
+except FileNotFoundError:
+    HELP_TEXT = "Help file not found."
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Sends the content loaded from bot_help.md
     await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
 
 async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -199,7 +205,7 @@ async def send_level_selection_menu(update: Update, context: ContextTypes.DEFAUL
     markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
-        await update.callback_query.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
+        await safe_edit_message(update.callback_query.message, text, reply_markup=markup)
     else:
         await update.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
 
@@ -224,7 +230,7 @@ async def show_machine_control_panel(update: Update, context: ContextTypes.DEFAU
                f"👤 User: {user_name}\n⏳ Left: {mins_left}m")
         
         if update.callback_query:
-            await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+            await safe_edit_message(update.callback_query.message, msg, reply_markup=InlineKeyboardMarkup(kb))
         else:
             await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
         return
@@ -271,7 +277,7 @@ async def show_machine_control_panel(update: Update, context: ContextTypes.DEFAU
         msg += f"\n\n{ping_status}"
 
     if update.callback_query:
-        await update.callback_query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+        await safe_edit_message(update.callback_query.message, msg, reply_markup=InlineKeyboardMarkup(kb))
     else:
         await update.message.reply_text(msg, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
@@ -326,7 +332,7 @@ async def send_status_text(update: Update, context: ContextTypes.DEFAULT_TYPE, m
     kb = [[InlineKeyboardButton("Switch Level View", callback_data="toggle_status_level")]]
     
     if update.callback_query:
-        await update.callback_query.message.edit_text(response, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+        await safe_edit_message(update.callback_query.message, response, reply_markup=InlineKeyboardMarkup(kb))
     elif update.message:
         await update.message.reply_text(response, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
@@ -350,7 +356,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
              InlineKeyboardButton("Nous", callback_data="reg_house_Nous"),
              InlineKeyboardButton("Aeon", callback_data="reg_house_Aeon")]
         ]
-        await query.edit_message_text("Select House:", reply_markup=InlineKeyboardMarkup(keyboard))
+        await safe_edit_message(query.message, "Select House:", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
     if data.startswith("reg_house_"):
@@ -361,7 +367,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             display_name=reg["name"], level=reg["level"], house=house
         )
         services.create_user(new_user)
-        await query.edit_message_text("✅ Registered! Type /menu to start.")
+        await safe_edit_message(query.message, "✅ Registered! Type /menu to start.")
         del context.user_data["registration"]
         return
 
@@ -371,7 +377,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if data == "toggle_status_level":
         kb = [[InlineKeyboardButton(l, callback_data=f"status_view_{l}") for l in ["9", "17"]]]
-        await query.edit_message_text("Select Level to View:", reply_markup=InlineKeyboardMarkup(kb))
+        # Use safe_edit_message to catch "Message Not Modified" here
+        await safe_edit_message(query.message, "Select Level to View:", reply_markup=InlineKeyboardMarkup(kb))
         return
     if data.startswith("status_view_"):
         lvl = data.split("_")[-1]
@@ -401,10 +408,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             print("❌ CRITICAL: No JobQueue found in context! Notifications will FAIL.")
 
-        try:
-            await query.edit_message_text(f"✅ Timer started for {mins} mins on {mid}!\nI'll notify you when it's done.")
-        except BadRequest as e:
-            if "Message is not modified" not in str(e): raise e
+        await safe_edit_message(query.message, f"✅ Timer started for {mins} mins on {mid}!\nI'll notify you when it's done.")
         return
 
     # FORCE STOP
@@ -469,8 +473,5 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("collect_"):
         mid = data.replace("collect_", "")
         services.make_machine_available(mid)
-        try:
-            await query.edit_message_text(f"✅ Machine {mid} marked as Available.\nThank you for collecting your laundry!")
-        except BadRequest as e:
-            if "Message is not modified" not in str(e): raise e
+        await safe_edit_message(query.message, f"✅ Machine {mid} marked as Available.\nThank you for collecting your laundry!")
         return
