@@ -48,9 +48,8 @@ async def safe_edit_message(message, text, reply_markup=None, parse_mode="Markdo
 async def set_bot_commands(application):
     commands = [
         BotCommand("start", "Select Machine (Start Laundry)"),
-        BotCommand("register", "Register / Welcome"),
+        BotCommand("register", "Register / Update Profile"),
         BotCommand("status", "Check Status"),
-        BotCommand("reset", "Update Profile (Re-Onboard)"),
         BotCommand("help", "Show Help")
     ]
     await application.bot.set_my_commands(commands)
@@ -132,19 +131,13 @@ except FileNotFoundError:
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(HELP_TEXT, parse_mode="Markdown")
 
-async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["registration"] = {"step": "NAME", "pending_machine": None}
-    await update.message.reply_text(
-        "🔄 *Update Profile*\n\nLet's set up your details again.\n\n*1. What is your Name?* (Please type it below)",
-        parse_mode="Markdown"
-    )
-
 async def register_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user = services.get_user(user.id)
     args = context.args
 
     if not db_user:
+        # New user - start registration
         context.user_data["registration"] = {"step": "NAME", "pending_machine": args[0] if args else None}
         intro_text = "👋 *Welcome to the Hostel Laundry Bot!*\n\nI am here to help you track washer/dryer availability and set timers.\n\nTo get started, I just need a few details."
         await update.message.reply_text(intro_text, parse_mode="Markdown")
@@ -155,9 +148,10 @@ async def register_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_machine_control_panel(update, context, args[0])
         return
 
-    welcome_name = escape_md(db_user.display_name)
+    # Existing user - start profile update flow
+    context.user_data["registration"] = {"step": "NAME", "pending_machine": None}
     await update.message.reply_text(
-        f"👋 Welcome back, {welcome_name} (Level {db_user.level})!\nUse /start to begin laundry.",
+        "🔄 *Update Profile*\n\nLet's update your details.\n\n*1. What is your Name?* (Please type it below)",
         parse_mode="Markdown"
     )
 
@@ -476,8 +470,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for job in context.job_queue.get_jobs_by_name(f"5min_{mid}"):
                 job.schedule_removal()
 
-        # Reset machine status
-        services.reset_machine_status(mid)
+        # Make machine available (user is taking clothes out now)
+        services.make_machine_available(mid)
 
         # Show success and return to control panel
         await query.answer("✅ Laundry stopped successfully!")

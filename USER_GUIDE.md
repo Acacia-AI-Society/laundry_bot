@@ -37,10 +37,9 @@ That's it! You're ready to use the bot.
 
 | Command | What It Does |
 |---------|--------------|
-| `/register` | Register as a new user (first time only) |
+| `/register` | Register or update your profile (name, level, house) |
 | `/start` | Open the machine selection panel |
 | `/status` | View live status of all machines at your level |
-| `/reset` | Update your profile (name, level, house) |
 | `/help` | Display the help guide |
 
 ### Starting a Laundry Cycle
@@ -152,7 +151,7 @@ The bot will send you automatic notifications:
 - Ensure you haven't blocked the bot
 
 ### "I want to change my registered level or house"
-**Solution:** Send `/reset` to update your profile information.
+**Solution:** Send `/register` again to update your profile information.
 
 ### "Someone force-stopped my machine"
 This means another user needed the machine and took over. You'll receive a notification when this happens. Please collect your laundry promptly to avoid this situation.

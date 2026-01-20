@@ -47,8 +47,7 @@ Is a machine marked as Finished (⚠️) but full of clothes?
 
 /start - Open the machine selection grid.
 /status - See list of all running/finished machines.
-/register - Register (if you haven't yet).
-/reset - Update your Name, Level, or House.
+/register - Register or update your profile (Name, Level, House).
 /help - Show this guide.
 
 💡 *Pro-Tips*
