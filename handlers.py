@@ -463,6 +463,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await safe_edit_message(query.message, "❌ You are not the owner of this machine.")
             return
 
+        # Save level before clearing machine data
+        level = machine.level
+
         # Cancel scheduled alarms
         if context.job_queue:
             for job in context.job_queue.get_jobs_by_name(f"done_{mid}"):
@@ -473,9 +476,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Make machine available (user is taking clothes out now)
         services.make_machine_available(mid)
 
-        # Show success and return to control panel
+        # Show success and return to machine selection menu
         await query.answer("✅ Laundry stopped successfully!")
-        await show_machine_control_panel(update, context, mid)
+        await send_level_selection_menu(update, context, level)
         return
 
     # PING OWNER
