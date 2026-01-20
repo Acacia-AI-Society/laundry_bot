@@ -47,8 +47,8 @@ async def safe_edit_message(message, text, reply_markup=None, parse_mode="Markdo
 
 async def set_bot_commands(application):
     commands = [
-        BotCommand("start", "Register / Welcome"),
-        BotCommand("menu", "Select Machine (Start Laundry)"),
+        BotCommand("start", "Select Machine (Start Laundry)"),
+        BotCommand("register", "Register / Welcome"),
         BotCommand("status", "Check Status"),
         BotCommand("reset", "Update Profile (Re-Onboard)"),
         BotCommand("help", "Show Help")
@@ -139,7 +139,7 @@ async def reset_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def register_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user = services.get_user(user.id)
     args = context.args
@@ -157,15 +157,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     welcome_name = escape_md(db_user.display_name)
     await update.message.reply_text(
-        f"👋 Welcome back, {welcome_name} (Level {db_user.level})!\nUse /menu to start laundry.",
+        f"👋 Welcome back, {welcome_name} (Level {db_user.level})!\nUse /start to begin laundry.",
         parse_mode="Markdown"
     )
 
-async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user = services.get_user(user.id)
     if not db_user:
-        await update.message.reply_text("⚠️ Please /start to register first.")
+        await update.message.reply_text("⚠️ Please /register first.")
         return
     await send_level_selection_menu(update, context, db_user.level)
 
@@ -220,15 +220,27 @@ async def show_machine_control_panel(update: Update, context: ContextTypes.DEFAU
     
     if machine.status == 'Running' and machine.end_time and machine.end_time > now:
         mins_left = format_time_delta(machine.end_time)
-        user_name = escape_md(machine.current_user.display_name if machine.current_user else "Unknown")
-        
-        kb = [
-            [InlineKeyboardButton("⚠️ Force Stop & Take Over", callback_data=f"force_{machine_id}")],
-            [InlineKeyboardButton("🔙 Cancel", callback_data=f"view_lvl_{machine.level}")]
-        ]
-        msg = (f"⚠️ *Conflict!* {display_name} is running.\n"
-               f"👤 User: {user_name}\n⏳ Left: {mins_left}m")
-        
+        current_user = update.effective_user
+
+        # Check if the viewer is the owner of the machine
+        if machine.current_user and machine.current_user.id == current_user.id:
+            # OWNER viewing their own running machine
+            kb = [
+                [InlineKeyboardButton("⏹️ Stop My Laundry", callback_data=f"stop_own_{machine_id}")],
+                [InlineKeyboardButton("🔙 Back", callback_data=f"view_lvl_{machine.level}")]
+            ]
+            msg = (f"⏳ *Your Laundry is Running*\n"
+                   f"🧺 Machine: {display_name}\n⏱️ Time Left: {mins_left}m")
+        else:
+            # NON-OWNER viewing someone else's running machine
+            user_name = escape_md(machine.current_user.display_name if machine.current_user else "Unknown")
+            kb = [
+                [InlineKeyboardButton("⚠️ Force Stop & Take Over", callback_data=f"force_{machine_id}")],
+                [InlineKeyboardButton("🔙 Cancel", callback_data=f"view_lvl_{machine.level}")]
+            ]
+            msg = (f"⚠️ *Conflict!* {display_name} is running.\n"
+                   f"👤 User: {user_name}\n⏳ Left: {mins_left}m")
+
         if update.callback_query:
             await safe_edit_message(update.callback_query.message, msg, reply_markup=InlineKeyboardMarkup(kb))
         else:
@@ -367,7 +379,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             display_name=reg["name"], level=reg["level"], house=house
         )
         services.create_user(new_user)
-        await safe_edit_message(query.message, "✅ Registered! Type /menu to start.")
+        await safe_edit_message(query.message, "✅ Registered! Type /start to begin.")
         del context.user_data["registration"]
         return
 
@@ -426,6 +438,49 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for job in context.job_queue.get_jobs_by_name(f"5min_{mid}"): job.schedule_removal()
 
         services.reset_machine_status(mid)
+        await show_machine_control_panel(update, context, mid)
+        return
+
+    # STOP OWN LAUNDRY - Show confirmation
+    if data.startswith("stop_own_"):
+        mid = data.replace("stop_own_", "")
+        machine = services.get_machine(mid)
+
+        # Safety check: verify user is the owner
+        if not machine.current_user or machine.current_user.id != user.id:
+            await safe_edit_message(query.message, "❌ You are not the owner of this machine.")
+            return
+
+        text = "⚠️ *Are you sure you want to stop your laundry?*\n\nThis will cancel your timer immediately."
+        kb = [
+            [InlineKeyboardButton("✅ Yes, Stop Now", callback_data=f"confirm_stop_{mid}")],
+            [InlineKeyboardButton("❌ Cancel", callback_data=f"sel_{mid}")]
+        ]
+        await safe_edit_message(query.message, text, reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    # CONFIRM STOP - Execute the stop
+    if data.startswith("confirm_stop_"):
+        mid = data.replace("confirm_stop_", "")
+        machine = services.get_machine(mid)
+
+        # Safety check again
+        if not machine.current_user or machine.current_user.id != user.id:
+            await safe_edit_message(query.message, "❌ You are not the owner of this machine.")
+            return
+
+        # Cancel scheduled alarms
+        if context.job_queue:
+            for job in context.job_queue.get_jobs_by_name(f"done_{mid}"):
+                job.schedule_removal()
+            for job in context.job_queue.get_jobs_by_name(f"5min_{mid}"):
+                job.schedule_removal()
+
+        # Reset machine status
+        services.reset_machine_status(mid)
+
+        # Show success and return to control panel
+        await query.answer("✅ Laundry stopped successfully!")
         await show_machine_control_panel(update, context, mid)
         return
 

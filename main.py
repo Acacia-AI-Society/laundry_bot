@@ -16,8 +16,8 @@ ptb_app = Application.builder().token(config.TOKEN).build() if config.TOKEN else
 
 def register_handlers(application):
     application.add_handler(CommandHandler("start", handlers.start_command))
+    application.add_handler(CommandHandler("register", handlers.register_command))
     application.add_handler(CommandHandler("reset", handlers.reset_command))
-    application.add_handler(CommandHandler("menu", handlers.menu_command))
     application.add_handler(CommandHandler("status", handlers.status_command))
     application.add_handler(CommandHandler("help", handlers.help_command))
     application.add_handler(CallbackQueryHandler(handlers.button_handler))

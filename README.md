@@ -4,10 +4,10 @@ A Telegram bot designed to manage hostel laundry room availability, set timers, 
 
 ## ✨ Features
 
-- **QR Code Scanning**: Deep linking allows users to scan a QR code on a machine to instantly open its control panel
 - **Live Status**: Real-time dashboard of all Washers and Dryers (Running/Available/Finished)
 - **Smart Timers**:
-  - Set 30m/60m timers
+  - Set 33m/39m timers for washers (inclusive of cooldown time)
+  - Set 35m/70m timers for dryers (inclusive of cooldown time)
   - Receive notifications 5 minutes before completion
   - Receive a "Laundry Done" alert when finished
 - **Context Awareness**: Supports multiple laundry levels (Level 9 & 17)
@@ -52,7 +52,7 @@ SUPABASE_URL="https://your-project.supabase.co"
 SUPABASE_SECRET_KEY="your_service_role_key"
 ```
 
-**Note**: Get .env details from josh
+**Note**: Get .env details from Joshua Wong (Aeon)
 
 ### 3. Database Setup (Supabase)
 
@@ -106,13 +106,13 @@ begin
   foreach lvl in array array['9', '17'] loop
     -- Create 5 Washers & 4 Dryers per level
     for i in 1..5 loop
-      insert into machines (id, type, level) 
-      values (lvl || '_washer_' || i, 'Washer', lvl) 
+      insert into machines (id, type, level)
+      values (lvl || '_washer_' || i, 'Washer', lvl)
       on conflict (id) do nothing;
     end loop;
     for i in 1..4 loop
-      insert into machines (id, type, level) 
-      values (lvl || '_dryer_' || i, 'Dryer', lvl) 
+      insert into machines (id, type, level)
+      values (lvl || '_dryer_' || i, 'Dryer', lvl)
       on conflict (id) do nothing;
     end loop;
   end loop;
