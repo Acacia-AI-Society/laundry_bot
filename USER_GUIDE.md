@@ -4,6 +4,16 @@ A complete guide for residents using the Laundry Bot to manage washing machines 
 
 ---
 
+## Why This Bot Exists
+
+**The Problem:** Residents often forget to collect their laundry on time, leaving clothes sitting in machines for extended periods. This causes inconvenience to others who are waiting to use the machines—sometimes for hours.
+
+**Our Solution:** The Laundry Bot tracks machine availability, sends timely reminders, and allows residents to notify each other when someone's laundry is ready for collection. We designed the bot to be as seamless as setting an alarm on your phone—just a few taps and you're done.
+
+**Why Your Participation Matters:** This system only works when everyone in Acacia uses it. Low usage leads to inaccurate status information, which defeats the purpose of the bot. When you use the bot consistently, you help create an accurate, real-time view of machine availability for the entire community.
+
+---
+
 ## Table of Contents
 1. [Getting Started](#getting-started)
 2. [Using the Bot](#using-the-bot)
