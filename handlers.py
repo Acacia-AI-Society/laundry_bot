@@ -260,7 +260,9 @@ def generate_heatmap(usage_data, level):
     # Only show relevant hours (6am - 11pm)
     heatmap_trimmed = heatmap[:, 6:24]
 
-    im = ax.imshow(heatmap_trimmed, cmap='YlOrRd', aspect='auto')
+    # Set vmin and vmax to actual data range for proper color scaling
+    vmax = heatmap_trimmed.max()
+    im = ax.imshow(heatmap_trimmed, cmap='YlOrRd', aspect='auto', vmin=0, vmax=vmax)
 
     # Labels
     days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
@@ -275,9 +277,14 @@ def generate_heatmap(usage_data, level):
     ax.set_ylabel('Day of Week')
     ax.set_title(f'Laundry Usage Patterns - Level {level} (Last 30 Days)')
 
-    # Add colorbar
+    # Add colorbar with integer ticks
     cbar = plt.colorbar(im, ax=ax)
     cbar.set_label('Number of Cycles Started')
+
+    # Set integer ticks on colorbar
+    if vmax > 0:
+        tick_values = np.arange(0, vmax + 1, max(1, int(vmax / 5)))
+        cbar.set_ticks(tick_values)
 
     plt.tight_layout()
 
@@ -774,7 +781,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await safe_edit_message(
             query.message,
             f"✅ *Thank you for reporting!*\n\n"
-            f"We've logged that *{display_name}* shows as \\[{reported_status}\\] but is actually in use.\n\n"
+            f"We've logged that *{display_name}* shows as [{reported_status}] but is actually in use.\n\n"
             f"This helps us track bot adoption. 📊"
         )
         return
