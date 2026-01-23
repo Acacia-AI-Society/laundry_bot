@@ -43,10 +43,33 @@ Is a machine marked as Finished (⚠️) but full of clothes?
 5. Cooldown: You can only ping once every 200 seconds to prevent spam.
 6. If they still don't collect, you can directly message or call them using the Telegram handle provided.
 
+📊 *Usage Statistics*
+
+Want to know the best time to do laundry? Use /stats!
+
+The bot tracks when people start their laundry and generates:
+• A *heatmap* showing busy times by day and hour
+• A *bar chart* showing the busiest/quietest hours
+• *Tips* on the best times to avoid queues
+
+Stats are shown for your registered level only.
+
+⚠️ *Report Machine Discrepancy*
+
+See a machine that's physically in use but shown as Available/Finished? Report it!
+
+1. Send /complain
+2. Select the machine that has the discrepancy
+3. Confirm your report
+
+This helps us track how many people are using the bot vs. not using it.
+
 ⚙️ *Commands Reference*
 
 /start - Open the machine selection grid.
 /status - See list of all running/finished machines.
+/complain - Report a machine discrepancy.
+/stats - View laundry usage patterns and best times.
 /register - Register or update your profile (Name, Level, House).
 /help - Show this guide.
 

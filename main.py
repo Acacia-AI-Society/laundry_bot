@@ -18,6 +18,8 @@ def register_handlers(application):
     application.add_handler(CommandHandler("start", handlers.start_command))
     application.add_handler(CommandHandler("register", handlers.register_command))
     application.add_handler(CommandHandler("status", handlers.status_command))
+    application.add_handler(CommandHandler("complain", handlers.complain_command))
+    application.add_handler(CommandHandler("stats", handlers.stats_command))
     application.add_handler(CommandHandler("help", handlers.help_command))
     application.add_handler(CallbackQueryHandler(handlers.button_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_registration_text))

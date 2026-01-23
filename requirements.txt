@@ -4,3 +4,6 @@ python-telegram-bot[job-queue]
 pydantic
 python-dotenv
 supabase
+matplotlib
+numpy
+pytz
