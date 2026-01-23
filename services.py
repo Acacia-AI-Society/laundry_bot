@@ -175,7 +175,7 @@ def get_hourly_usage_data(level: str, days_back: int = 30) -> List[Dict]:
     """Fetch usage events for the past N days for a specific level."""
     cutoff = (datetime.datetime.now() - datetime.timedelta(days=days_back)).isoformat()
     response = supabase.table("machine_usage_events") \
-        .select("hour_of_day, day_of_week, machine_id") \
+        .select("hour_of_day, day_of_week, machine_id, created_at") \
         .eq("level", level) \
         .gte("created_at", cutoff) \
         .execute()
