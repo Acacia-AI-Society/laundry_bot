@@ -254,6 +254,17 @@ def generate_heatmap(usage_data, level):
         hour = event["hour_of_day"]
         heatmap[day][hour] += 1
 
+    # Calculate number of unique days in dataset
+    unique_dates = set()
+    for event in usage_data:
+        if 'created_at' in event:
+            unique_dates.add(event['created_at'][:10])  # Extract date part (YYYY-MM-DD)
+
+    days_count = max(len(unique_dates), 1)  # Avoid division by zero
+
+    # Convert to daily averages
+    heatmap = heatmap / days_count
+
     # Create figure
     fig, ax = plt.subplots(figsize=(12, 5))
 
@@ -277,14 +288,16 @@ def generate_heatmap(usage_data, level):
     ax.set_ylabel('Day of Week')
     ax.set_title(f'Laundry Usage Patterns - Level {level} (Last 30 Days)')
 
-    # Add colorbar with integer ticks
+    # Add colorbar with decimal ticks
     cbar = plt.colorbar(im, ax=ax)
-    cbar.set_label('Number of Cycles Started')
+    cbar.set_label('Average Cycles Per Day')
 
-    # Set integer ticks on colorbar
+    # Set appropriate ticks on colorbar
     if vmax > 0:
-        tick_values = np.arange(0, vmax + 1, max(1, int(vmax / 5)))
+        # For decimal values, use up to 6 tick marks
+        tick_values = np.linspace(0, vmax, min(6, int(vmax * 2) + 1))
         cbar.set_ticks(tick_values)
+        cbar.set_ticklabels([f'{v:.1f}' for v in tick_values])
 
     plt.tight_layout()
 
@@ -754,7 +767,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_text = machine.status if machine else "Unknown"
         text = (f"⚠️ *Confirm Report*\n\n"
                 f"Machine: *{display_name}*\n"
-                f"Current Status: \\[{status_text}\\]\n\n"
+                f"Current Status: [{status_text}]\n\n"
                 f"Are you sure this machine is actually IN USE by someone not using the bot?")
         kb = [
             [InlineKeyboardButton("✅ Confirm Report", callback_data=f"complain_confirm_{mid}")],
