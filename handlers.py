@@ -1,8 +1,13 @@
 import datetime
 import logging
+from io import BytesIO
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import ContextTypes, Application
 from telegram.error import BadRequest
+import matplotlib
+matplotlib.use('Agg')  # Non-GUI backend for server
+import matplotlib.pyplot as plt
+import numpy as np
 import services
 
 # Setup logger
@@ -50,6 +55,8 @@ async def set_bot_commands(application):
         BotCommand("start", "Select Machine (Start Laundry)"),
         BotCommand("register", "Register / Update Profile"),
         BotCommand("status", "Check Status"),
+        BotCommand("complain", "Report Machine Discrepancy"),
+        BotCommand("stats", "View Usage Patterns"),
         BotCommand("help", "Show Help")
     ]
     await application.bot.set_my_commands(commands)
@@ -170,6 +177,161 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     machines = services.get_machines_by_level(level_to_show)
     await send_status_text(update, context, machines, level_to_show)
 
+async def complain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Report a machine discrepancy (machine in use but shown as available)."""
+    user = update.effective_user
+    db_user = services.get_user(user.id)
+    if not db_user:
+        await update.message.reply_text("⚠️ Please /register first.")
+        return
+    await send_complain_menu(update, context, db_user.level)
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show laundry usage statistics with visualizations."""
+    user = update.effective_user
+    db_user = services.get_user(user.id)
+    if not db_user:
+        await update.message.reply_text("⚠️ Please /register first to see stats for your level.")
+        return
+
+    level = db_user.level
+    await update.message.reply_text(f"📊 Generating laundry statistics for Level {level}...")
+
+    usage_data = services.get_hourly_usage_data(level, days_back=30)
+
+    if len(usage_data) < 10:
+        await update.message.reply_text(
+            "📊 *Not enough data yet!*\n\n"
+            "We need more usage history to generate meaningful stats.\n"
+            "Check back in a few days after more people use the bot.",
+            parse_mode="Markdown"
+        )
+        return
+
+    # Generate and send heatmap
+    heatmap_buf = generate_heatmap(usage_data, level)
+    await update.message.reply_photo(
+        photo=heatmap_buf,
+        caption=f"🗓️ *Laundry Heatmap - Level {level}*\nDarker = Busier. Find the light spots for free machines!",
+        parse_mode="Markdown"
+    )
+
+    # Generate and send hourly bar chart
+    bar_buf = generate_hourly_bar_chart(usage_data)
+    await update.message.reply_photo(
+        photo=bar_buf,
+        caption="⏰ *Best Times to Do Laundry*\nGreen = Low traffic, Red = Avoid if possible",
+        parse_mode="Markdown"
+    )
+
+    # Text summary
+    hourly_counts = [0] * 24
+    for event in usage_data:
+        hourly_counts[event["hour_of_day"]] += 1
+
+    total_cycles = len(usage_data)
+    busiest_hour = max(range(24), key=lambda h: hourly_counts[h])
+    # Find quietest hour between 6am-11pm (reasonable laundry hours)
+    quietest_hour = min(range(6, 23), key=lambda h: hourly_counts[h])
+
+    summary = (
+        f"📈 *Quick Stats (Last 30 Days) - Level {level}*\n\n"
+        f"• Total cycles: {total_cycles}\n"
+        f"• Busiest hour: {busiest_hour}:00\n"
+        f"• Quietest hour: {quietest_hour}:00\n\n"
+        f"💡 *Tip*: Try doing laundry around {quietest_hour}:00 for shorter waits!"
+    )
+    await update.message.reply_text(summary, parse_mode="Markdown")
+
+# --- GRAPH GENERATION ---
+def generate_heatmap(usage_data, level):
+    """Generate a heatmap of usage by day and hour."""
+    # Initialize 7x24 grid (days x hours)
+    heatmap = np.zeros((7, 24))
+
+    for event in usage_data:
+        day = event["day_of_week"]
+        hour = event["hour_of_day"]
+        heatmap[day][hour] += 1
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 5))
+
+    # Only show relevant hours (6am - 11pm)
+    heatmap_trimmed = heatmap[:, 6:24]
+
+    im = ax.imshow(heatmap_trimmed, cmap='YlOrRd', aspect='auto')
+
+    # Labels
+    days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+    hours = [f'{h}:00' for h in range(6, 24)]
+
+    ax.set_xticks(range(len(hours)))
+    ax.set_xticklabels(hours, rotation=45, ha='right', fontsize=8)
+    ax.set_yticks(range(len(days)))
+    ax.set_yticklabels(days)
+
+    ax.set_xlabel('Hour of Day')
+    ax.set_ylabel('Day of Week')
+    ax.set_title(f'Laundry Usage Patterns - Level {level} (Last 30 Days)')
+
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label('Number of Cycles Started')
+
+    plt.tight_layout()
+
+    # Save to BytesIO
+    buf = BytesIO()
+    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+    buf.seek(0)
+    plt.close(fig)
+
+    return buf
+
+def generate_hourly_bar_chart(usage_data):
+    """Generate bar chart showing busiest hours."""
+    hourly_counts = [0] * 24
+    for event in usage_data:
+        hourly_counts[event["hour_of_day"]] += 1
+
+    fig, ax = plt.subplots(figsize=(10, 4))
+
+    hours = range(24)
+
+    # Color based on percentile
+    if max(hourly_counts) > 0:
+        p33 = np.percentile([c for c in hourly_counts if c > 0], 33) if any(hourly_counts) else 1
+        p66 = np.percentile([c for c in hourly_counts if c > 0], 66) if any(hourly_counts) else 2
+        colors = ['#2ecc71' if c <= p33 else '#f1c40f' if c <= p66 else '#e74c3c' for c in hourly_counts]
+    else:
+        colors = ['#2ecc71'] * 24
+
+    ax.bar(hours, hourly_counts, color=colors)
+    ax.set_xlabel('Hour of Day')
+    ax.set_ylabel('Total Cycles Started')
+    ax.set_title('Laundry Activity by Hour (Last 30 Days)')
+    ax.set_xticks(range(0, 24, 2))
+    ax.set_xticklabels([f'{h}:00' for h in range(0, 24, 2)])
+
+    # Add legend
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor='#2ecc71', label='Low (Best Time)'),
+        Patch(facecolor='#f1c40f', label='Medium'),
+        Patch(facecolor='#e74c3c', label='High (Busiest)')
+    ]
+    ax.legend(handles=legend_elements, loc='upper right')
+
+    plt.tight_layout()
+
+    buf = BytesIO()
+    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+    buf.seek(0)
+    plt.close(fig)
+
+    return buf
+
 # --- MENUS ---
 async def send_level_selection_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, level: str):
     machines = services.get_machines_by_level(level)
@@ -178,9 +340,9 @@ async def send_level_selection_menu(update: Update, context: ContextTypes.DEFAUL
     def get_btn_text(type_short, type_key, index):
         mid = f"{level}_{type_key}_{index}"
         status = status_map.get(mid, "Available")
-        if status == "Running": return f"❌ {type_short}{index}" 
-        elif status == "Finished": return f"⚠️ {type_short}{index}" 
-        else: return f"✅ {type_short}{index}" 
+        if status == "Running": return f"❌ {type_short}{index}"
+        elif status == "Finished": return f"⚠️ {type_short}{index}"
+        else: return f"✅ {type_short}{index}"
 
     keyboard = []
     row1 = [InlineKeyboardButton(get_btn_text("W", "washer", i), callback_data=f"sel_{level}_washer_{i}") for i in range(1, 4)]
@@ -188,7 +350,7 @@ async def send_level_selection_menu(update: Update, context: ContextTypes.DEFAUL
     row3 = [InlineKeyboardButton(get_btn_text("D", "dryer", i), callback_data=f"sel_{level}_dryer_{i}") for i in range(1, 3)]
     row4 = [InlineKeyboardButton(get_btn_text("D", "dryer", i), callback_data=f"sel_{level}_dryer_{i}") for i in range(3, 5)]
     keyboard.extend([row1, row2, row3, row4])
-    
+
     nav_row = [
         InlineKeyboardButton("Lvl 9", callback_data="view_lvl_9"),
         InlineKeyboardButton("Lvl 17", callback_data="view_lvl_17"),
@@ -196,6 +358,40 @@ async def send_level_selection_menu(update: Update, context: ContextTypes.DEFAUL
     keyboard.append(nav_row)
 
     text = f"👇 *Select Machine (Level {level})*\n\n✅ Available  ❌ Running  ⚠️ Finished"
+    markup = InlineKeyboardMarkup(keyboard)
+
+    if update.callback_query:
+        await safe_edit_message(update.callback_query.message, text, reply_markup=markup)
+    else:
+        await update.message.reply_text(text, reply_markup=markup, parse_mode="Markdown")
+
+async def send_complain_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, level: str):
+    """Show machine grid for reporting discrepancies."""
+    machines = services.get_machines_by_level(level)
+    status_map = {m.id: m.status for m in machines}
+
+    def get_btn_text(type_short, type_key, index):
+        mid = f"{level}_{type_key}_{index}"
+        status = status_map.get(mid, "Available")
+        if status == "Running": return f"❌ {type_short}{index}"
+        elif status == "Finished": return f"⚠️ {type_short}{index}"
+        else: return f"✅ {type_short}{index}"
+
+    keyboard = []
+    row1 = [InlineKeyboardButton(get_btn_text("W", "washer", i), callback_data=f"complain_sel_{level}_washer_{i}") for i in range(1, 4)]
+    row2 = [InlineKeyboardButton(get_btn_text("W", "washer", i), callback_data=f"complain_sel_{level}_washer_{i}") for i in range(4, 6)]
+    row3 = [InlineKeyboardButton(get_btn_text("D", "dryer", i), callback_data=f"complain_sel_{level}_dryer_{i}") for i in range(1, 3)]
+    row4 = [InlineKeyboardButton(get_btn_text("D", "dryer", i), callback_data=f"complain_sel_{level}_dryer_{i}") for i in range(3, 5)]
+    keyboard.extend([row1, row2, row3, row4])
+
+    # Switch level button
+    other_level = "17" if level == "9" else "9"
+    nav_row = [InlineKeyboardButton(f"🔄 Switch to Level {other_level}", callback_data=f"complain_lvl_{other_level}")]
+    keyboard.append(nav_row)
+
+    text = (f"⚠️ *Report Machine Discrepancy (Level {level})*\n\n"
+            f"Select the machine that is IN USE but shown as available/finished.\n\n"
+            f"✅ Available  ❌ Running  ⚠️ Finished")
     markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
@@ -404,7 +600,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mid = parts[0].replace("set_", "")
         mins = int(parts[1])
         end_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=mins)
-        services.update_machine_status(mid, "Running", end_time, user.id)
+        services.update_machine_status(mid, "Running", end_time, user.id, duration_minutes=mins)
         
         if context.job_queue:
             print(f"🕒 Scheduling {mins}m timer for {mid}")
@@ -526,4 +722,65 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mid = data.replace("collect_", "")
         services.make_machine_available(mid)
         await safe_edit_message(query.message, f"✅ Machine {mid} marked as Available.\nThank you for collecting your laundry!")
+        return
+
+    # --- COMPLAIN HANDLERS ---
+    # Switch level in complain menu
+    if data.startswith("complain_lvl_"):
+        level = data.replace("complain_lvl_", "")
+        await send_complain_menu(update, context, level)
+        return
+
+    # Select machine to report
+    if data.startswith("complain_sel_"):
+        mid = data.replace("complain_sel_", "")
+        machine = services.get_machine(mid)
+        display_name = format_machine_name(mid)
+
+        # Check rate limit
+        if not services.can_submit_complaint(user.id, mid):
+            await query.answer("⏳ You already reported this machine recently. Please wait.", show_alert=True)
+            return
+
+        # Show confirmation screen
+        level = mid.split("_")[0]
+        status_text = machine.status if machine else "Unknown"
+        text = (f"⚠️ *Confirm Report*\n\n"
+                f"Machine: *{display_name}*\n"
+                f"Current Status: \\[{status_text}\\]\n\n"
+                f"Are you sure this machine is actually IN USE by someone not using the bot?")
+        kb = [
+            [InlineKeyboardButton("✅ Confirm Report", callback_data=f"complain_confirm_{mid}")],
+            [InlineKeyboardButton("⬅️ Back", callback_data=f"complain_back_{level}")]
+        ]
+        await safe_edit_message(query.message, text, reply_markup=InlineKeyboardMarkup(kb))
+        return
+
+    # Confirm and submit complaint
+    if data.startswith("complain_confirm_"):
+        mid = data.replace("complain_confirm_", "")
+        machine = services.get_machine(mid)
+        display_name = format_machine_name(mid)
+
+        # Double-check rate limit
+        if not services.can_submit_complaint(user.id, mid):
+            await query.answer("⏳ You already reported this machine recently.", show_alert=True)
+            return
+
+        # Log the complaint
+        reported_status = machine.status if machine else "Unknown"
+        services.log_complaint(user.id, mid, reported_status)
+
+        await safe_edit_message(
+            query.message,
+            f"✅ *Thank you for reporting!*\n\n"
+            f"We've logged that *{display_name}* shows as \\[{reported_status}\\] but is actually in use.\n\n"
+            f"This helps us track bot adoption. 📊"
+        )
+        return
+
+    # Go back to complain menu
+    if data.startswith("complain_back_"):
+        level = data.replace("complain_back_", "")
+        await send_complain_menu(update, context, level)
         return
