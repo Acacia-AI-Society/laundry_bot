@@ -58,7 +58,7 @@ Stats are shown for your registered level only.
 
 See a machine that's physically in use but shown as Available/Finished? Report it!
 
-1. Send /complain
+1. Send /report
 2. Select the machine that has the discrepancy
 3. Confirm your report
 
@@ -68,7 +68,7 @@ This helps us track how many people are using the bot vs. not using it.
 
 /start - Open the machine selection grid.
 /status - See list of all running/finished machines.
-/complain - Report a machine discrepancy.
+/report - Report a machine discrepancy.
 /stats - View laundry usage patterns and best times.
 /register - Register or update your profile (Name, Level, House).
 /help - Show this guide.

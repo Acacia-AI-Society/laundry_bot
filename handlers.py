@@ -55,7 +55,7 @@ async def set_bot_commands(application):
         BotCommand("start", "Select Machine (Start Laundry)"),
         BotCommand("register", "Register / Update Profile"),
         BotCommand("status", "Check Status"),
-        BotCommand("complain", "Report Machine Discrepancy"),
+        BotCommand("report", "Report Machine Discrepancy"),
         BotCommand("stats", "View Usage Patterns"),
         BotCommand("help", "Show Help")
     ]
@@ -177,7 +177,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     machines = services.get_machines_by_level(level_to_show)
     await send_status_text(update, context, machines, level_to_show)
 
-async def complain_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def report_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Report a machine discrepancy (machine in use but shown as available)."""
     user = update.effective_user
     db_user = services.get_user(user.id)
