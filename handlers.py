@@ -13,6 +13,7 @@ import services
 # Setup logger
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+ALLOWED_DURATIONS = {"Washer": {33, 39}, "Dryer": {35, 70}}
 
 # --- HELPERS ---
 def format_time_delta(end_dt: datetime.datetime):
@@ -39,6 +40,9 @@ def escape_md(text: str) -> str:
     if not text: return ""
     escaped = str(text).replace("\\", "\\\\")
     return escaped.replace("_", "\\_").replace("*", "\\*").replace("`", "\\`").replace("[", "\\[")
+
+def valid_cycle_duration(machine_type: str, minutes: int) -> bool:
+    return minutes in ALLOWED_DURATIONS.get(machine_type, set())
 
 async def safe_edit_message(message, text, reply_markup=None, parse_mode="Markdown"):
     """Safely edits a message, ignoring 'Message is not modified' errors."""
@@ -79,8 +83,11 @@ async def alarm_5min(context: ContextTypes.DEFAULT_TYPE):
 async def alarm_done(context: ContextTypes.DEFAULT_TYPE):
     job = context.job
     mid = job.data.get('mid')
+    user_id = job.data.get('user_id')
     display_name = format_machine_name(mid)
     try:
+        if not user_id or not services.complete_machine_cycle(mid, user_id):
+            return
         print(f"✅ Executing DONE alarm for {mid}")
         kb = [[InlineKeyboardButton("✅ I collected my laundry", callback_data=f"collect_{mid}")]]
         await context.bot.send_message(
@@ -118,12 +125,12 @@ async def restore_timers(application: Application):
         mid = m.id
         
         if delay > 0:
-            application.job_queue.run_once(alarm_done, delay, chat_id=user_id, data={"mid": mid}, name=f"done_{mid}")
+            application.job_queue.run_once(alarm_done, delay, chat_id=user_id, data={"mid": mid, "user_id": user_id}, name=f"done_{mid}")
             if delay > 300:
                 application.job_queue.run_once(alarm_5min, delay - 300, chat_id=user_id, data={"mid": mid}, name=f"5min_{mid}")
             count += 1
         else:
-            application.job_queue.run_once(alarm_done, 1, chat_id=user_id, data={"mid": mid}, name=f"done_{mid}")
+            application.job_queue.run_once(alarm_done, 1, chat_id=user_id, data={"mid": mid, "user_id": user_id}, name=f"done_{mid}")
             count += 1
             
     print(f"✅ Successfully restored {count} active timers.")
@@ -173,7 +180,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     db_user = services.get_user(user.id)
-    level_to_show = db_user.level if db_user else "9"
+    if not db_user:
+        await update.message.reply_text("⚠️ Please /register first.")
+        return
+    level_to_show = db_user.level
     machines = services.get_machines_by_level(level_to_show)
     await send_status_text(update, context, machines, level_to_show)
 
@@ -574,9 +584,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lvl = data.split("_")[-1]
         context.user_data["registration"]["level"] = lvl
         keyboard = [
-            [InlineKeyboardButton("Zenith", callback_data="reg_house_Zenith"),
-             InlineKeyboardButton("Nous", callback_data="reg_house_Nous"),
-             InlineKeyboardButton("Aeon", callback_data="reg_house_Aeon")]
+            [InlineKeyboardButton(house, callback_data=f"reg_house_{house}")
+             for house in ["Aeon", "Genesis", "Nous", "Telos", "Zenith"]]
         ]
         await safe_edit_message(query.message, "Select House:", reply_markup=InlineKeyboardMarkup(keyboard))
         return
@@ -619,12 +628,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parts = data.rsplit("_", 1)
         mid = parts[0].replace("set_", "")
         mins = int(parts[1])
+        machine = services.get_machine(mid)
+        if not machine or not valid_cycle_duration(machine.type, mins):
+            await query.answer("❌ Invalid machine or timer.", show_alert=True)
+            return
+
+        # Finish an overdue database record before allowing the next user to claim it.
+        if machine.status == "Finished" and machine.current_user:
+            services.complete_machine_cycle(mid, machine.current_user.id)
+
         end_time = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=mins)
-        services.update_machine_status(mid, "Running", end_time, user.id, duration_minutes=mins)
+        if not services.start_machine_cycle(mid, end_time, user.id, duration_minutes=mins):
+            await query.answer("⚠️ This machine was just claimed by someone else.", show_alert=True)
+            await show_machine_control_panel(update, context, mid)
+            return
         
         if context.job_queue:
             print(f"🕒 Scheduling {mins}m timer for {mid}")
-            context.job_queue.run_once(alarm_done, mins * 60, chat_id=user.id, data={"mid": mid}, name=f"done_{mid}")
+            context.job_queue.run_once(alarm_done, mins * 60, chat_id=user.id, data={"mid": mid, "user_id": user.id}, name=f"done_{mid}")
             if mins > 5:
                 context.job_queue.run_once(alarm_5min, (mins - 5) * 60, chat_id=user.id, data={"mid": mid}, name=f"5min_{mid}")
         else:
@@ -637,17 +658,25 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("force_"):
         mid = data.replace("force_", "")
         machine = services.get_machine(mid)
-        if machine.current_user:
+        if not machine or machine.status != "Running" or not machine.current_user:
+            await query.answer("⚠️ This machine is no longer running.", show_alert=True)
+            await show_machine_control_panel(update, context, mid)
+            return
+        if machine.current_user.id == user.id:
+            await query.answer("❌ You already own this machine.", show_alert=True)
+            return
+        if services.force_stop_machine(mid, machine.current_user.id):
             services.log_audit_event("FORCE_STOP", mid, machine.current_user.id, user.id)
             try:
                 await context.bot.send_message(machine.current_user.id, f"🚨 Your machine {mid} was stopped by {user.first_name}.")
-            except: pass
+            except Exception as e:
+                logger.warning("Failed to notify force-stopped user: %s", e)
             
             if context.job_queue:
                 for job in context.job_queue.get_jobs_by_name(f"done_{mid}"): job.schedule_removal()
                 for job in context.job_queue.get_jobs_by_name(f"5min_{mid}"): job.schedule_removal()
-
-        services.reset_machine_status(mid)
+        else:
+            await query.answer("⚠️ This machine was just updated.", show_alert=True)
         await show_machine_control_panel(update, context, mid)
         return
 
@@ -690,7 +719,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 job.schedule_removal()
 
         # Make machine available (user is taking clothes out now)
-        services.make_machine_available(mid)
+        if not services.make_machine_available(mid, user.id, "Running"):
+            await query.answer("⚠️ This machine was just updated.", show_alert=True)
+            await show_machine_control_panel(update, context, mid)
+            return
 
         # Show success and return to machine selection menu
         await query.answer("✅ Laundry stopped successfully!")
@@ -728,7 +760,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 clean_house = escape_md(u.house)
                 ping_msg = f"✅ Ping sent to *{clean_name}* ({clean_house}){handle}!"
                 
-            except:
+            except Exception as e:
+                logger.warning("Failed to send ping for %s: %s", mid, e)
                 ping_msg = "❌ Failed to Ping (User Blocked Bot)"
                 await query.answer("❌ Could not reach user.", show_alert=True)
         else:
@@ -740,7 +773,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # COLLECT (I'M DONE)
     if data.startswith("collect_"):
         mid = data.replace("collect_", "")
-        services.make_machine_available(mid)
+        if not services.make_machine_available(mid, user.id, "Finished"):
+            await query.answer("❌ Only the cycle owner can collect this laundry.", show_alert=True)
+            return
         await safe_edit_message(query.message, f"✅ Machine {mid} marked as Available.\nThank you for collecting your laundry!")
         return
 

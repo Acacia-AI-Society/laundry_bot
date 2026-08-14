@@ -11,6 +11,7 @@ elif os.path.exists("/secrets/.env"):
 # Telegram Config
 TOKEN = os.getenv("TOKEN")
 ADMIN_IDS = json.loads(os.getenv("ADMIN_IDS", "[]"))
+WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET")
 
 # Supabase Config
 SUPABASE_URL = os.getenv("SUPABASE_URL")

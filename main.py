@@ -1,5 +1,6 @@
 import logging
-from fastapi import FastAPI, Request
+import secrets
+from fastapi import FastAPI, HTTPException, Request
 from telegram import Update
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters
@@ -37,6 +38,9 @@ async def startup_event():
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
     if not ptb_app: return {"status": "error"}
+    supplied_secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    if not config.WEBHOOK_SECRET or not secrets.compare_digest(supplied_secret, config.WEBHOOK_SECRET):
+        raise HTTPException(status_code=403, detail="Invalid webhook secret")
     req = await request.json()
     update = Update.de_json(req, ptb_app.bot)
     await ptb_app.process_update(update)

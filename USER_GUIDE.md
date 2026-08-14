@@ -34,7 +34,7 @@ Search for the Laundry Bot on Telegram or scan the QR code posted in the laundry
 1. Send `/register` to the bot
 2. Enter your **name** when prompted
 3. Select your **laundry level** (Level 9 or Level 17)
-4. Select your **house** (Zenith, Nous, or Aeon)
+4. Select your **house** (Aeon, Genesis, Nous, Telos, or Zenith)
 5. You'll see: "Registered! Type /start to begin."
 
 That's it! You're ready to use the bot.
@@ -182,7 +182,7 @@ This means another user needed the machine and took over. You'll receive a notif
 
 A: The bot collects minimal data necessary for operation:
 - **Name** (as entered by the user during registration)
-- **House name** (Zenith, Nous, or Aeon)
+- **House name** (Aeon, Genesis, Nous, Telos, or Zenith)
 - **Telegram ID** (automatically provided by Telegram, used to send notifications)
 
 No phone numbers, emails, or other personal identifiers are collected.

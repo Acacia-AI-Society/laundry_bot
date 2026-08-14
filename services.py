@@ -40,7 +40,7 @@ def get_user(user_id: int) -> Optional[UserInfo]:
     return None
 
 def create_user(user_info: UserInfo):
-    data = user_info.dict(exclude_none=True)
+    data = user_info.model_dump(exclude_none=True)
     supabase.table("users").upsert(data).execute()
 
 # --- MACHINE SERVICES ---
@@ -72,41 +72,49 @@ def get_running_machines() -> List[MachineState]:
     response = query.execute()
     return _parse_machines(response.data)
 
-def update_machine_status(machine_id: str, status: str, end_time: datetime.datetime, user_id: int, duration_minutes: int = 0):
-    # Update machine state
-    supabase.table("machines").update({
-        "status": status,
-        "start_time": datetime.datetime.now().isoformat(),
+def start_machine_cycle(machine_id: str, end_time: datetime.datetime, user_id: int, duration_minutes: int) -> bool:
+    """Claim an available/finished machine without overwriting a running cycle."""
+    response = supabase.table("machines").update({
+        "status": "Running",
+        "start_time": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "end_time": end_time.isoformat(),
         "current_user_id": user_id,
         "last_user_id": user_id,
-        "last_ping": None # Reset ping when new cycle starts
-    }).eq("id", machine_id).execute()
+        "last_ping": None
+    }).eq("id", machine_id).in_("status", ["Available", "Finished"]).execute()
 
     # Log usage event for peak period tracking
-    if status == "Running" and duration_minutes > 0:
+    if response.data:
         level = machine_id.split("_")[0]  # Extract level from machine_id (e.g., "9_washer_1" -> "9")
         try:
             log_usage_event(machine_id, user_id, level, duration_minutes)
         except Exception as e:
             print(f"⚠️ Failed to log usage event: {e}")
+    return bool(response.data)
 
-def reset_machine_status(machine_id: str):
-    # Used when force stopping or marking as finished
-    supabase.table("machines").update({
+def complete_machine_cycle(machine_id: str, user_id: int) -> bool:
+    """Persist completion only for the cycle owned by the timer's user."""
+    response = supabase.table("machines").update({"status": "Finished"}) \
+        .eq("id", machine_id).eq("status", "Running").eq("current_user_id", user_id).execute()
+    return bool(response.data)
+
+def force_stop_machine(machine_id: str, owner_id: int) -> bool:
+    response = supabase.table("machines").update({
         "status": "Finished",
-        "current_user_id": None # Remove current user ownership
-    }).eq("id", machine_id).execute()
+        "current_user_id": None
+    }).eq("id", machine_id).eq("status", "Running").eq("current_user_id", owner_id).execute()
+    return bool(response.data)
 
-def make_machine_available(machine_id: str):
-    # Used when user collects laundry
-    supabase.table("machines").update({
+def make_machine_available(machine_id: str, user_id: int, status: str) -> bool:
+    """Release a machine only if its recorded owner is performing the action."""
+    response = supabase.table("machines").update({
         "status": "Available",
         "current_user_id": None,
         "start_time": None,
         "end_time": None,
-        "last_ping": None # Clear ping history
-    }).eq("id", machine_id).execute()
+        "last_ping": None
+    }).eq("id", machine_id).eq("status", status).eq("current_user_id", user_id).execute()
+    return bool(response.data)
 
 def register_ping(machine_id: str):
     # Updates the last_ping timestamp to NOW
@@ -173,7 +181,7 @@ def log_usage_event(machine_id: str, user_id: int, level: str, duration_minutes:
 
 def get_hourly_usage_data(level: str, days_back: int = 30) -> List[Dict]:
     """Fetch usage events for the past N days for a specific level."""
-    cutoff = (datetime.datetime.now() - datetime.timedelta(days=days_back)).isoformat()
+    cutoff = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days_back)).isoformat()
     response = supabase.table("machine_usage_events") \
         .select("hour_of_day, day_of_week, machine_id, created_at") \
         .eq("level", level) \
@@ -185,7 +193,7 @@ def get_hourly_usage_data(level: str, days_back: int = 30) -> List[Dict]:
 
 def can_submit_complaint(user_id: int, machine_id: str) -> bool:
     """Check if user can submit complaint (rate limit: 1 per machine per hour)."""
-    one_hour_ago = (datetime.datetime.now() - datetime.timedelta(hours=1)).isoformat()
+    one_hour_ago = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)).isoformat()
     response = supabase.table("complaints") \
         .select("id") \
         .eq("user_id", user_id) \
